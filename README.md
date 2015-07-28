@@ -8,6 +8,7 @@ Torch installed with cunn
 Some miscellaneous lua packages installed from:
 https://raw.githubusercontent.com/rahulk90/helper-files/master/install_torch_deps.sh
 
+# Learning the Model
 
 Run with starter.lua
 
