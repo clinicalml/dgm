@@ -16,6 +16,8 @@ Specify options as: -option optionvalue to modify default settings.
 
 Creates a folder "checkpoint" with model details and samples every 100 epochs. 
 
+Run: th visualize.lua -path ./checkpoint -file filename to visualize samples stored in filename
+
 # References:
 ----------
 Auto-Encoding Variational Bayes
