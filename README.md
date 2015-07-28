@@ -1,6 +1,12 @@
 # Deep Generative Model
 This contains the Torch Implementation of a Deep Generative Model trained using Stochastic Backpropagation. The model is trained on the GPU with binarized MNIST.
 
+Requirements
+Torch installed with cunn 
+Some miscellaneous lua packages installed from:
+https://raw.githubusercontent.com/rahulk90/helper-files/master/install_torch_deps.sh
+
+
 Run with starter.lua
 
 Specify options as: -option <optionvalue> to modify default settings. 
