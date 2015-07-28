@@ -1,8 +1,10 @@
 # Deep Generative Model
 This contains the Torch Implementation of a Deep Generative Model trained using Stochastic Backpropagation. The model is trained on the GPU with binarized MNIST.
 
-Requirements
+# Requirements
+
 Torch installed with cunn 
+
 Some miscellaneous lua packages installed from:
 https://raw.githubusercontent.com/rahulk90/helper-files/master/install_torch_deps.sh
 
@@ -13,7 +15,7 @@ Specify options as: -option <optionvalue> to modify default settings.
 
 Creates a folder "checkpoint" with model details and samples every 100 epochs. 
 
-References:
+# References:
 ----------
 Auto-Encoding Variational Bayes
 http://arxiv.org/abs/1312.6114
