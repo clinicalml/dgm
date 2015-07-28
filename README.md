@@ -1,10 +1,11 @@
 # Deep Generative Model
 This contains the Torch Implementation of a Deep Generative Model trained using Stochastic Backpropagation. The model is trained on the GPU with binarized MNIST.
 
-Run with:
-i) th starter.lua
-ii) Specify options as: -option <optionvalue> to modify default settings. 
-iii) Creates a folder "checkpoint" with model details and samples every 100 epochs. 
+Run with starter.lua
+
+Specify options as: -option <optionvalue> to modify default settings. 
+
+Creates a folder "checkpoint" with model details and samples every 100 epochs. 
 
 References:
 ----------
