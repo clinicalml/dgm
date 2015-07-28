@@ -11,7 +11,7 @@ https://raw.githubusercontent.com/rahulk90/helper-files/master/install_torch_dep
 
 Run with starter.lua
 
-Specify options as: -option <optionvalue> to modify default settings. 
+Specify options as: -option optionvalue to modify default settings. 
 
 Creates a folder "checkpoint" with model details and samples every 100 epochs. 
 
