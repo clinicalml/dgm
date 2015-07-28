@@ -16,6 +16,7 @@ Specify options as: -option optionvalue to modify default settings.
 
 Creates a folder "checkpoint" with model details and samples every 100 epochs. 
 
+Uses display (https://github.com/szym/display) to show intermediate processing (Samples etc.) to a browser display
 Run: th visualize.lua -path ./checkpoint -file filename to visualize samples stored in filename
 
 # References:
