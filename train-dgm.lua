@@ -106,6 +106,7 @@ for epoch = 1,opt.epochs do
 
         --Track predictions on test set
         local nll,predictions = dgm:getNLL(data.test_x)
+        print ("Test NLL: ",nll)
         testnll = appendToTensor(testnll,nll)
         len = testnll:size(1)
         format.win = id_testnll 
@@ -116,6 +117,7 @@ for epoch = 1,opt.epochs do
     if epoch %50 == 0 then 
         --Save tensor 
 		local savedata = {}
+		savedata.titlestr = infostr
 		savedata.time_taken = torch.Tensor(timelist)
 		savedata.upperbound = torch.Tensor(ublist)
         local samples = dgm:genSamples(25)

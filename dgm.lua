@@ -106,11 +106,7 @@ function DGM:forwardAndBackward(batch)
     --Do forward and backward pass
     local etas_and_kl
 	local batch_fwd 
-	if opt.q_embed then 
-		batch_fwd = opt.q_model:forward(batch)
-	else
-		batch_fwd = batch
-	end
+	batch_fwd = batch
 	etas_and_kl = self.var_model:forward(batch_fwd)
     local KL = 0
     local etas = {}
@@ -141,12 +137,9 @@ end
 
 --Compute NLL on dataset 
 function DGM:getNLL(dataset)
-        --Do forward  pass
+    --Do forward  pass
     local etas_and_kl
 	local batch = dataset
-	if opt.q_embed then 
-		batch = opt.q_model:forward(batch)
-    end
     etas_and_kl = self.var_model:forward(batch)
     local KL = 0
     local etas = {}
@@ -159,7 +152,7 @@ function DGM:getNLL(dataset)
     end
     local probs= self.gen_model:forward(etas)
     local nll = self.crit:forward(probs,dataset)
-    return nll,probs
+    return nll/dataset:size(1),probs
 end
 
 --Generate samples from model 

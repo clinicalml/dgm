@@ -7,6 +7,9 @@ function loadMNIST(cuda)
 	local f = hdf5.open('mnist.hdf5')
 	dataset.train_x = torch.cat(f:read('x_train'):all():float(),f:read('x_valid'):all():float(),1)
 	dataset.test_x  = f:read('x_test'):all():float()
+    --Binarize
+    dataset.train_x = torch.gt(dataset.train_x,0.5):float()
+    dataset.test_x  = torch.gt(dataset.test_x,0.5):float()
 	if cuda then 
 		dataset.train_x = dataset.train_x:cuda()
 		dataset.test_x  = dataset.test_x:cuda()
