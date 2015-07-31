@@ -8,6 +8,8 @@ function GaussianReparam:__init(dimension,noiseparam)
     self.dimension = dimension
     self.gradInput = {}
 	self.noiseparam = noiseparam or 0.05
+	self.train = true
+	self.KL = 0
 end 
 
 --Forward pass
@@ -27,14 +29,12 @@ function GaussianReparam:updateOutput(input)
 	local kl = (input[2] + 1):mul(-1):add(torch.pow(input[1],2)):add(torch.exp(input[2]))
 	self.KL = kl:sum()*0.5
 
-	--Add noise to output 
+	--Add noise to output during training 
+	if not self.train then
+		noise:fill(0)
+	end
 	self.output:add(noise*self.noiseparam)
-	--Also output statistics
-	local stats = {}
-	stats.norm_mu = torch.norm(input[1])
-	stats.norm_R  =  torch.norm(input[2]-1)
-	stats.KL = self.KL 
-    return {self.output,stats}
+    return self.output
 end
 
 --Backward pass
