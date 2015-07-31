@@ -21,5 +21,5 @@ http://arxiv.org/abs/1312.6114
 Stochastic Backpropagation and Approximate Inference in Deep Generative Models
 http://arxiv.org/abs/1401.4082
 
-Some code adopted from:
+See also:
 https://github.com/y0ast/VAE-Torch
