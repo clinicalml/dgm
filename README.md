@@ -14,8 +14,7 @@ Run th train.lua
 
 Uses display (https://github.com/szym/display) to show samples and reconstruction to a browser display
 
-# References:
-----------
+# References
 Auto-Encoding Variational Bayes
 http://arxiv.org/abs/1312.6114
 
