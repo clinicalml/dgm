@@ -6,14 +6,17 @@ require "cunn"
 require "optim"
 require "GaussianReparam"
 disp = require "display"
-data=loadBinarizedMNIST(true)
---data=loadMNIST(true)
 
+---------------- Load Data ---------------
+data=loadBinarizedMNIST(true)
+
+---------------- Model Params. -----------
 local dim_input = 784
 local dim_hidden= 400
 local dim_stochastic = 100
 local nonlinearity   = nn.ReLU
 
+--------- Recognition. Network -----------
 local var_inp = nn.Identity()()
 local dropped_inp = nn.Dropout()(var_inp)
 local q_1 = nonlinearity()(nn.Linear(dim_input,dim_hidden)(dropped_inp))
@@ -26,6 +29,7 @@ print (reparam.KL)
 local z  = reparam({mu,logsigma})
 local var_model = nn.gModule({var_inp},{z})
 
+--------- Generative Network -------------
 local gen_inp = nn.Identity()()
 local hid1 = nonlinearity()(nn.Linear(dim_stochastic,dim_hidden)(gen_inp))
 local hid2 = nonlinearity()(nn.Linear(dim_hidden,dim_hidden)(hid1))
@@ -34,21 +38,19 @@ local hid4 = nonlinearity()(nn.Linear(dim_hidden,dim_hidden)(hid3))
 local reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid4))
 local gen_model = nn.gModule({gen_inp},{reconstr})
 
+----- Combining Models into Single MLP----
 local inp = nn.Identity()()
 mlp = nn.gModule({inp},{gen_model(var_model(inp))})
 crit= nn.BCECriterion()
 crit.sizeAverage = false
 
---Setup for saving intermediate output
+--------- Setup for Training/Viz.---------
 img_format,format = setupDisplay()
 setupFolder('./save')
-
---Put on GPU
 mlp:cuda()
 crit:cuda()
 data.train_x = data.train_x:cuda()
 data.test_x  = data.test_x:cuda()
-
 parameters, gradients = mlp:getParameters()
 config = {
     learningRate = 0.0001,
@@ -56,7 +58,7 @@ config = {
 batchSize = 100
 state = {}
 
---Sample
+---------  Sample from Gen. Model---------
 function getsamples()
 	local p = gen_model:forward(torch.randn(batchSize,dim_stochastic):typeAs(data.train_x))
 	local s = torch.gt(p:double(),0.5)
@@ -68,7 +70,7 @@ function getsamples()
 	end
 	return samples,mean_prob
 end
---Evaluate likelihood
+---------  Evaluate Likelihood   ---------
 function eval(dataset)
 	mlp:evaluate()
 	local probs = mlp:forward(dataset)
@@ -76,7 +78,7 @@ function eval(dataset)
 	mlp:training()
 	return (nll+reparam.KL)/dataset:size(1),probs
 end
---Stitch images together
+--------- Stitch Images Together ---------
 function stitch(probs,batch)
 	local imgs = {}
 	for i = 1,batchSize do 
@@ -85,7 +87,8 @@ function stitch(probs,batch)
 	return imgs
 end
 
-for epoch =1,450 do 
+-------------- Training Loop -------------
+for epoch =1,455 do 
     local upperbound = 0
 	local trainnll = 0
     local time = sys.clock()
@@ -97,6 +100,7 @@ for epoch =1,450 do
     local N_test = data.test_x:size(1) - (data.test_x:size(1) % batchSize)
 	local probs 
     local batch = torch.Tensor(batchSize,data.train_x:size(2)):typeAs(data.train_x)
+	-- Pass through data
     for i = 1, N, batchSize do
         xlua.progress(i+batchSize-1, data.train_x:size(1))
 
@@ -124,6 +128,7 @@ for epoch =1,450 do
         upperbound = upperbound + batchupperbound[1]
     end
     print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
+	--Display reconstructions and samples
 	img_format.title="Train Reconstructions"
 	img_format.win = id_reconstr
 	id_reconstr = disp.images(stitch(probs,batch),img_format)
@@ -138,7 +143,6 @@ for epoch =1,450 do
 	img_format.title="Test Reconstructions"
 	img_format.win = id_testreconstr
 	id_testreconstr = disp.images(stitch(p_test,b_test),img_format)
-	--Samples and NLL
 	img_format.title="Model Samples"
 	img_format.win = id_samples
 	local s,mp = getsamples()
@@ -147,7 +151,8 @@ for epoch =1,450 do
 	img_format.win = id_mp
 	id_mp =  disp.images(mp,img_format)
 	print ("Train NLL:",trainnll/N,"Test NLL: ",testnll)
-
+	
+	--Save results
     if upperboundlist then
         upperboundlist = torch.cat(upperboundlist,torch.Tensor(1,1):fill(upperbound/N),1)
     else

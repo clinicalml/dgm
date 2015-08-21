@@ -1,7 +1,7 @@
 require "cunn"
 require "paths"
 mnist = require "mnist"
-
+--Loading binarized MNIST dataset
 function loadBinarizedMNIST(cuda)
 	local dataset = {}
 	local trainset = mnist.traindataset()
@@ -25,14 +25,13 @@ function loadBinarizedMNIST(cuda)
 	collectgarbage()
 	return dataset
 end
-
+--Check if folder exists, if not create it
 function setupFolder(folder)
     if not paths.dirp(folder) then
         paths.mkdir(folder)
     end
 end
-
---Append to Tensor
+--Append to datalist if not nil
 function appendToTensor(datalist,data)
     if datalist then
         datalist = torch.cat(datalist,torch.Tensor(1,1):fill(data),1)
@@ -42,7 +41,7 @@ function appendToTensor(datalist,data)
     return datalist
 end
 
---Setup variables for displaying results
+--variables for displaying results
 function setupDisplay()
     local img_format = {width = 800,height = 800,title = ''}
     local format = {win = '',width=500,height=500,xLabel='Iterations',title = ''}
