@@ -3,12 +3,13 @@ require "xlua"
 require "nngraph"
 require "utils"
 require "cunn"
+require "cutorch"
 require "optim"
 require "GaussianReparam"
 disp = require "display"
 
 torch.manualSeed(1)
-
+cutorch.manualSeed(1)
 ---------------- Load Data ---------------
 data=loadBinarizedMNIST(true)
 
