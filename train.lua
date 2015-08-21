@@ -85,13 +85,13 @@ function stitch(probs,batch)
 	return imgs
 end
 
-for epoch =1,500 do 
+for epoch =1,450 do 
     local upperbound = 0
 	local trainnll = 0
     local time = sys.clock()
     local shuffle = torch.randperm(data.train_x:size(1))
 	if epoch==100 then config.learningRate = 5e-5 end
-	if epoch > 30 then config.learningRate = math.max(config.learningRate / 1.000004, 0.000001) end
+	if epoch > 30 then config.learningRate = math.max(config.learningRate / 1.000005, 0.000001) end
     --Make sure batches are always batchSize
     local N = data.train_x:size(1) - (data.train_x:size(1) % batchSize)
     local N_test = data.test_x:size(1) - (data.test_x:size(1) % batchSize)
@@ -117,13 +117,13 @@ for epoch =1,500 do
             mlp:backward(batch,df_dw)
             local upperbound = nll  + reparam.KL 
 			trainnll = nll + trainnll
-            return upperbound, gradients+(parameters*0.01)
+            return upperbound, gradients+(parameters*0.05)
         end
 
         parameters, batchupperbound = optim.rmsprop(opfunc, parameters, config, state)
         upperbound = upperbound + batchupperbound[1]
     end
-    print("\nEpoch: " .. epoch .. " Lowerbound: " .. upperbound/N .. " time: " .. sys.clock() - time)
+    print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
 	img_format.title="Train Reconstructions"
 	img_format.win = id_reconstr
 	id_reconstr = disp.images(stitch(probs,batch),img_format)
