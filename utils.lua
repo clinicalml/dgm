@@ -1,4 +1,3 @@
-require "hdf5"
 require "cunn"
 require "paths"
 mnist = require "mnist"
@@ -24,18 +23,6 @@ function loadBinarizedMNIST(cuda)
 	trainset = nil
 	testset  = nil
 	collectgarbage()
-	return dataset
-end
-function loadMNIST(cuda)
-	local dataset = {}
-	local f = hdf5.open('mnist.hdf5')
-	dataset.train_x = torch.cat(f:read('x_train'):all():float(),f:read('x_valid'):all():float(),1)
-	dataset.test_x  = f:read('x_test'):all():float()
-	if cuda then 
-		dataset.train_x = dataset.train_x:cuda()
-		dataset.test_x  = dataset.test_x:cuda()
-	end
-	dataset.dim_input = dataset.train_x:size(2)
 	return dataset
 end
 

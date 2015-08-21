@@ -51,7 +51,7 @@ data.test_x  = data.test_x:cuda()
 
 parameters, gradients = mlp:getParameters()
 config = {
-    learningRate = 0.0005,
+    learningRate = 0.0001,
 }
 batchSize = 100
 state = {}
@@ -85,12 +85,13 @@ function stitch(probs,batch)
 	return imgs
 end
 
-for epoch =1,75 do 
+for epoch =1,500 do 
     local upperbound = 0
 	local trainnll = 0
     local time = sys.clock()
     local shuffle = torch.randperm(data.train_x:size(1))
-
+	if epoch==100 then config.learningRate = 5e-5 end
+	if epoch > 30 then config.learningRate = math.max(config.learningRate / 1.000004, 0.000001) end
     --Make sure batches are always batchSize
     local N = data.train_x:size(1) - (data.train_x:size(1) % batchSize)
     local N_test = data.test_x:size(1) - (data.test_x:size(1) % batchSize)
@@ -116,10 +117,10 @@ for epoch =1,75 do
             mlp:backward(batch,df_dw)
             local upperbound = nll  + reparam.KL 
 			trainnll = nll + trainnll
-            return upperbound, gradients
+            return upperbound, gradients+(parameters*0.01)
         end
 
-        x, batchupperbound = optim.rmsprop(opfunc, parameters, config, state)
+        parameters, batchupperbound = optim.rmsprop(opfunc, parameters, config, state)
         upperbound = upperbound + batchupperbound[1]
     end
     print("\nEpoch: " .. epoch .. " Lowerbound: " .. upperbound/N .. " time: " .. sys.clock() - time)
@@ -157,5 +158,8 @@ for epoch =1,75 do
         torch.save('save/parameters.t7', parameters)
         torch.save('save/state.t7', state)
         torch.save('save/upperbound.t7', torch.Tensor(upperboundlist))
+		local s,mp = getsamples()
+		torch.save('save/samples.t7',s)
+		torch.save('save/mean_probs.t7',mp)
     end
 end
