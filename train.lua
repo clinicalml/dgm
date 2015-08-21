@@ -7,6 +7,8 @@ require "optim"
 require "GaussianReparam"
 disp = require "display"
 
+torch.manualSeed(1)
+
 ---------------- Load Data ---------------
 data=loadBinarizedMNIST(true)
 
