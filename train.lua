@@ -12,6 +12,7 @@ torch.manualSeed(1)
 cutorch.manualSeed(1)
 ---------------- Load Data ---------------
 data=loadBinarizedMNIST(true)
+data=loadMNIST(true)
 
 ---------------- Model Params. -----------
 local dim_input = 784

@@ -1,8 +1,8 @@
 require "cunn"
 require "paths"
 mnist = require "mnist"
---Loading binarized MNIST dataset
-function loadBinarizedMNIST(cuda)
+--Loading MNIST dataset (NON standard dataset. This is not the one to be used for comparison of NLL)
+function loadMNIST(cuda)
 	local dataset = {}
 	local trainset = mnist.traindataset()
 	local testset = mnist.testdataset()
@@ -56,3 +56,88 @@ function stringToBool(str)
         return false
     end
 end
+
+--Read MNIST file downloaded and return Tensor  
+function readMNISTfile(fname,lines)
+	local data = torch.Tensor(lines,784):fill(0)
+	local f    = torch.DiskFile(fname,'r')
+	for i=1,lines do 
+		data[i] = torch.Tensor(f:readDouble(784))
+	end
+	return data
+end
+
+--Download data and setup directory
+function getBinarizedMNIST()
+	--Get train & valid. Append them
+	if not paths.dirp('./binarizedMNIST') then 
+		paths.mkdir('./binarizedMNIST')
+	end
+	print ('Downloading data...')
+	os.execute('wget -O ./binarizedMNIST/binarized_mnist_train.amat http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_train.amat')		
+	os.execute('wget -O ./binarizedMNIST/binarized_mnist_valid.amat http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_valid.amat') 
+	os.execute('wget -O ./binarizedMNIST/binarized_mnist_test.amat http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_test.amat')
+	print ('Converting data to torch format...')
+	test  = readMNISTfile('./binarizedMNIST/binarized_mnist_test.amat',10000)
+	train = readMNISTfile('./binarizedMNIST/binarized_mnist_train.amat',50000)
+	valid = readMNISTfile('./binarizedMNIST/binarized_mnist_valid.amat',10000)
+	print ('Saving data...')
+	torch.save('./binarizedMNIST/train.t7',train)
+	torch.save('./binarizedMNIST/test.t7',test)
+	torch.save('./binarizedMNIST/valid.t7',valid)
+end
+
+--Load standard MNIST data
+function loadBinarizedMNIST()
+	if not paths.dirp('./binarizedMNIST') or not paths.filep('./binarizedMNIST/valid.t7') or not paths.filep('./binarizedMNIST/test.t7') or not paths.filep('./binarizedMNIST/train.t7') then 
+		getBinarizedMNIST()
+	end
+	print ('Loading Binarized MNIST dataset')
+	local train = torch.load('./binarizedMNIST/train.t7')
+	local test  = torch.load('./binarizedMNIST/test.t7')
+	local valid = torch.load('./binarizedMNIST/valid.t7')
+	return torch.cat(train,valid,1),test
+end
+
+
+--[[
+function testGetData()
+	train,test = loadBinarizedMNIST()
+	print (train:size())
+	print (test:size())
+end
+
+function testRead()
+	disp = require "display"
+	print('Reading test')
+	test = readMNISTfile('./binarized_mnist_test.amat',10000)
+	print ('Displaying test',test:size())
+	local samples = {}
+	local shuffle = torch.randperm(10000)
+	for i=1,100 do 
+		samples[i] = test[shuffle[i] ]:reshape(28,28)
+	end
+	disp.images(samples,{title='Test'})
+	
+	print('Reading train')
+	train= readMNISTfile('./binarized_mnist_train.amat',50000)
+	print ('Displaying train',train:size())
+	local samples = {}
+	local shuffle = torch.randperm(10000)
+	for i=1,100 do 
+		samples[i] =train[shuffle[i] ]:reshape(28,28)
+	end
+	disp.images(samples,{title='Train'})
+	
+	print('Reading valid')
+	valid = readMNISTfile('./binarized_mnist_valid.amat',10000)
+	print ('Displaying valid',valid:size())
+	local samples = {}
+	local shuffle = torch.randperm(10000)
+	for i=1,100 do
+		samples[i] =valid[shuffle[i] ]:reshape(28,28)
+	end
+	disp.images(samples,{title='Valid'})
+	print ('Done')
+end
+--]]
