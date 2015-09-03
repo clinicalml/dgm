@@ -88,7 +88,7 @@ function getBinarizedMNIST()
 end
 
 --Load standard MNIST data
-function loadBinarizedMNIST()
+function loadBinarizedMNIST(cuda)
 	if not paths.dirp('./binarizedMNIST') or not paths.filep('./binarizedMNIST/valid.t7') or not paths.filep('./binarizedMNIST/test.t7') or not paths.filep('./binarizedMNIST/train.t7') then 
 		getBinarizedMNIST()
 	end
@@ -96,7 +96,16 @@ function loadBinarizedMNIST()
 	local train = torch.load('./binarizedMNIST/train.t7')
 	local test  = torch.load('./binarizedMNIST/test.t7')
 	local valid = torch.load('./binarizedMNIST/valid.t7')
-	return torch.cat(train,valid,1),test
+	local dataset = {}
+	dataset.train_x = torch.cat(train,valid,1)
+	dataset.test_x  = test
+	dataset.dim_input = 784
+	if cuda then 
+		dataset.train_x = dataset.train_x:cuda()
+		dataset.test_x  = dataset.test_x:cuda()
+	end
+	collectgarbage()
+	return dataset
 end
 
 
