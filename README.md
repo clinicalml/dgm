@@ -4,6 +4,7 @@
 * in both training scripts, make sure to adjust paths and model params accordingly (for examples, see `exp1_baseline.lua`, `exp3_planarflow5.lua`, and `exp5_planarflow5deep.lua`)
 * modified utils.lua so that data directory is adjustable
 * `analyze_results.ipynb` and `visualize.ipynb` are useful for checking experiment results
+* see `check_all.lua` and `check_PlanarFlow.lua` for scripts to verify calculations in `PlanarFlow.lua` and `GaussianReparam_normflow.lua`
 
 
 # Deep Generative Model
