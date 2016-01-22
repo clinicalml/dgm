@@ -8,12 +8,12 @@ require "optim"
 require "GaussianReparam"
 require 'Maxout'
 require 'hdf5'
+require 'rmsprop'
 disp = require "display"
 
 local devicenum = devicenum or 1
 cutorch.setDevice(devicenum)
-torch.manualSeed(1)
-cutorch.manualSeed(1)
+torch.setdefaulttensortype('torch.FloatTensor')
 ---------------- Train Params ------------
 local savedir = savedir or 'save'
 local optimMethod = optimMethod or 'adam'
@@ -27,26 +27,23 @@ data=loadBinarizedMNIST(true,datadir)
 
 ---------------- Model Params. -----------
 local dim_input      = 784
-local dim_hidden     = dim_hidden or 400
+local dim_hidden     = dim_hidden or 200
 local dim_stochastic = dim_stochastic or 40
 local dropout        = dropout or false
 local maxoutWindow   = maxoutWindow or 4
 local nonlinearity   = nonlinearity or nn.ReLU
 local S              = S or 200
+local init_std       = init_std or 1e-3
 
 --------- Recognition. Network -----------
 local var_inp = nn.Identity()()
-local dropped_inp = nn.Dropout(0.25)(var_inp)
-q_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(dropped_inp)
 if dropout then
-    q_hid_1 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(dropout)(q_1))
+    q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(nn.Dropout(dropout)(var_inp))
     q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(dropout)(q_hid_1))
 else
-    q_hid_1 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_1)
+    q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(var_inp)
     q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_hid_1)
 end
-q_hid_1 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_1)
-q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_hid_1)
 mu  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_2)
 logsigma  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_2)
 reparam   = nn.GaussianReparam(dim_stochastic)
@@ -54,14 +51,25 @@ z = reparam({mu,logsigma})
 local var_model = nn.gModule({var_inp},{z})
 
 --------- Generative Network -------------
+gen_inp = nn.Identity()()
+if dropout then
+	hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(nn.Dropout(dropout)(gen_inp))
+	hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(dropout)(hid1))
+	reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid2))
+else
+	hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(gen_inp)
+	hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid1)
+	reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid2))
+end
+gen_model = nn.gModule({gen_inp},{reconstr})
+
+---------- Initialization ----------------
 torch.manualSeed(1)
-local gen_inp = nn.Identity()()
-local hid1 = nonlinearity()(nn.Linear(dim_stochastic,dim_hidden)(gen_inp))
-local hid2 = nonlinearity()(nn.Linear(dim_hidden,dim_hidden)(hid1))
-local hid3 = nonlinearity()(nn.Linear(dim_hidden,dim_hidden)(hid2))
-local hid4 = nonlinearity()(nn.Linear(dim_hidden,dim_hidden)(hid3))
-local reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid4))
-local gen_model = nn.gModule({gen_inp},{reconstr})
+cutorch.manualSeed(1)
+gp,gdp = gen_model:getParameters()
+gp:copy(torch.randn(gp:size()):mul(init_std))
+vp,vdp = var_model:getParameters()
+vp:copy(torch.randn(vp:size()):mul(init_std))
 
 ----- Combining Models into Single MLP----
 local inp = nn.Identity()()
@@ -78,7 +86,7 @@ data.train_x = data.train_x:cuda()
 data.test_x  = data.test_x:cuda()
 parameters, gradients = mlp:getParameters()
 config = optimconfig or {
-    learningRate = 0.00005,
+    learningRate = 1e-5,
 }
 print(config)
 batchSize = 100
@@ -101,41 +109,54 @@ function eval(dataset)
 	mlp:evaluate()
 	local probs = mlp:forward(dataset)
 	local nll   = crit:forward(probs,dataset)
+	local kl    = reparam.KL
+    local N     = dataset:size(1)
 	mlp:training()
-	return (nll+reparam.KL)/dataset:size(1),probs
+	return (nll+kl)/N, probs, kl/N
 end
 --------- Test p(v) via importance sampling ---------
 -- see appendix E in Rezende, D. J., Mohamed, S., and Wierstra, D. Stochastic backpropagation and approximate inference in deep generative models. In ICML, 2014.
-function estimate_testNLL(dataset,S)
+function estimate_logpv(dataset,S)
         mlp:evaluate()
         local S = S or 200
         local logp = nil
+        local sample_flow_output = torch.Tensor(dataset:size(1),S,dim_stochastic):float()
         for s = 1,S do
-                local probs = mlp:forward(dataset)
-				-- ll = p(v|z_s) ~ calc assumes each pixel output is conditional independent given latent states
-                local ll = (torch.cmul(torch.log(probs+1e-12),dataset)+torch.cmul(torch.log(probs*(-1)+1+1e-12),dataset*(-1)+1)):sum(2)
-				-- latent = z_s = sampled z|v
-                local latent = z.data.module.output
-                -- logprior is standard normal
-                local logprior = (torch.pow(latent,2):sum(2)+dim_stochastic*math.log(2*math.pi))*(-0.5)
-				-- assume logsigma is log(sigma^2)
-                local logsig = logsigma.data.module.output
-                local m = mu.data.module.output
-                local logq = ((torch.exp(logsig*(-1)):cmul(torch.pow(latent-m,2))):sum(2)+logsig:sum(2)*(0.5)+dim_stochastic*math.log(2*math.pi))*(-0.5)
-				-- log p_s = log(p(v|z_s)*p(z_s)/q(z_s|v)) 
-                local logp_s = ll+logprior-logq
-				-- logp = [logp_1,...,logp_S]
-                if logp ~= nil then
-                        logp = nn.JoinTable(2):cuda():forward{logp_s,logp}
-                else
-                        logp = logp_s
-                end
+            collectgarbage()
+            local probs = mlp:forward(dataset)
+            -- ll = log(p(v|z_s)) ~ calc assumes each pixel output is conditional independent given latent states
+            local ll = (torch.cmul(torch.log(probs+1e-12),dataset)+torch.cmul(torch.log(probs*(-1)+1+1e-12),dataset*(-1)+1)):sum(2)
+
+            -- z_s = sampled z|v
+            local z_s = z.data.module.output
+
+            -- logprior is standard normal (note that the -n*0.5*log2pi will cancel out with logq)
+            local logprior = torch.cmul(z_s,z_s):sum(2)*(-0.5)
+
+            -- epsilon
+            local eps = z.data.module.eps
+
+            -- assume logsigma is log(sigma^2)
+            local logsig2 = logsigma.data.module.output
+            local logq = torch.cmul(eps,eps):sum(2)*(-0.5) + logsig2:sum(2)*(-0.5)
+
+            -- sum the terms together
+            local logp_s = ll+logprior-logq
+
+            -- logp = [logp_1,...,logp_S]
+            if logp ~= nil then
+                    logp = nn.JoinTable(2):forward{logp_s:float(),logp}
+            else
+                    logp = logp_s:float()
+            end
+            sample_flow_output[{{},s,{}}]:copy(var_model.output:float())
         end
         local a = logp:max(2)
-		-- computing logsumexp: https://hips.seas.harvard.edu/blog/2013/01/09/computing-log-sum-exp/
+        -- computing logsumexp: https://hips.seas.harvard.edu/blog/2013/01/09/computing-log-sum-exp/
         local logsumexp = a + torch.log(torch.exp(logp-nn.Replicate(S,2):cuda():forward(a)):sum(2)) - math.log(S)
         local logpv = logsumexp:mean()
-        return logpv
+        mlp:training()
+        return logpv, sample_flow_output
 end
 --------- Stitch Images Together ---------
 function stitch(probs,batch)
@@ -146,11 +167,23 @@ function stitch(probs,batch)
 	return imgs
 end
 
+--------- Update lists of values ---------
+function updateList(list,newval)
+    local list = list
+    if list then
+        list = torch.cat(list,torch.Tensor(1,1):fill(newval),1)
+    else
+        list = torch.Tensor(1,1):fill(newval)
+    end
+    return list
+end
+
 -------------- Training Loop -------------
 for epoch =1,5000 do 
 	collectgarbage()
     local upperbound = 0
 	local trainnll = 0
+	local trainKL = 0
     local time = sys.clock()
     local shuffle = torch.randperm(data.train_x:size(1))
 	--if epoch==100 then config.learningRate = 5e-5 end
@@ -179,31 +212,33 @@ for epoch =1,5000 do
             local nll = crit:forward(probs, batch)
             local df_dw = crit:backward(probs, batch)
             mlp:backward(batch,df_dw)
-            local upperbound = nll  + reparam.KL 
+			local kl = reparam.KL
+            local upperbound = nll  + kl
+			trainKL = trainKL + kl
 			trainnll = nll + trainnll
-            return upperbound, gradients+(parameters*0.05)
+            return upperbound, gradients
         end
 
-	if optimMethod == 'rmsprop' then
-		parameters, batchupperbound = optim.rmsprop(opfunc, parameters, config, state)
-	elseif optimMethod == 'adam' then
-		parameters, batchupperbound = optim.adam(opfunc, parameters, config, state)
-	else
-		error('unknown optimization method')
-	end
+		if optimMethod == 'rmsprop' then
+			parameters, batchupperbound = optim.rmsprop(opfunc, parameters, config, state)
+		elseif optimMethod == 'adam' then
+			parameters, batchupperbound = optim.adam(opfunc, parameters, config, state)
+		else
+			error('unknown optimization method')
+		end
         upperbound = upperbound + batchupperbound[1]
     end
 	
 	--Save results
-    if upperboundlist then
-        upperboundlist = torch.cat(upperboundlist,torch.Tensor(1,1):fill(upperbound/N),1)
-    else
-        upperboundlist = torch.Tensor(1,1):fill(upperbound/N)
-    end
+	upperboundlist = updateList(upperboundlist,upperbound/N)
+    trainKLlist = updateList(trainKLlist,trainKL/N)
 
     if epoch % 10  == 0 then
     	print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
-        testlogpv = estimate_testNLL(data.test_x,S)*(-1)
+        trainlogpv, train_sample_z = estimate_logpv(data.train_x,S)
+        testlogpv, test_sample_z = estimate_logpv(data.test_x,S)
+        trainlogpv = trainlogpv*(-1)
+        testlogpv = testlogpv*(-1)
         print("logp = " .. testlogpv)
 		if savebestmodel then
 			if bestmodel == nil then
@@ -226,7 +261,7 @@ for epoch =1,5000 do
 		img_format.title="Train Reconstructions"
 		img_format.win = id_reconstr
 		id_reconstr = disp.images(stitch(probs,batch),img_format)
-		local testnll,probs = eval(data.test_x)
+		local testnll, probs, testKL = eval(data.test_x)
 		local b_test = torch.zeros(100,data.test_x:size(2)) 
 		local p_test = torch.zeros(100,data.test_x:size(2)) 
 		local shufidx = torch.randperm(data.test_x:size(1))
@@ -246,22 +281,31 @@ for epoch =1,5000 do
 		id_mp =  disp.images(mp,img_format)
 		print ("Train NLL:",trainnll/N,"Test NLL: ",testnll)
 		print ("saving to directory: " .. savedir)
-		if testupperboundlist then
-			testupperboundlist = torch.cat(testupperboundlist,torch.Tensor(1,1):fill(testnll),1)
-			testlogpvlist = torch.cat(testlogpvlist,torch.Tensor(1,1):fill(testlogpv),1)
-		else
-			testupperboundlist = torch.Tensor(1,1):fill(testnll)
-			testlogpvlist = torch.Tensor(1,1):fill(testlogpv)
-		end
+
+        testupperboundlist = updateList(testupperboundlist,testnll)
+        testKLlist         = updateList(testKLlist,testKL)
+        testlogpvlist      = updateList(testlogpvlist,testlogpv)
+        trainlogpvlist     = updateList(trainlogpvlist,trainlogpv)
+
+		sys.execute('mkdir -p ' .. savedir)
 		torch.save(paths.concat(savedir,'parameters.t7'), parameters)
 		torch.save(paths.concat(savedir,'state.t7'), state)
 		torch.save(paths.concat(savedir,'upperbound.t7'), torch.Tensor(upperboundlist))
+		torch.save(paths.concat(savedir,'upperbound_test.t7'),testupperboundlist)
 		writeFile = hdf5.open(paths.concat(savedir,'upperbounds.h5'),'w')
 		writeFile:write('train',upperboundlist)
 		writeFile:write('test',testupperboundlist)
+		writeFile:write('train_logpv',trainlogpvlist)
 		writeFile:write('test_logpv',testlogpvlist)
+        writeFile:write('trainKL',trainKLlist)
+        writeFile:write('testKL',testKLlist)
 		writeFile:close()
-		torch.save(paths.concat(savedir,'upperbound_test.t7'),testupperboundlist)
+        if (epoch == 1) or (epoch % 100) then
+            writeFile = hdf5.open(paths.concat(savedir,'sample_flow_output' .. epoch .. '.h5'),'w')
+            writeFile:write('train_z',train_sample_z)
+            writeFile:write('test_z',test_sample_z)
+            writeFile:close()
+        end
 		local s,mp = getsamples()
 		torch.save(paths.concat(savedir,'samples.t7'),s)
 		torch.save(paths.concat(savedir,'mean_probs.t7'),mp)
