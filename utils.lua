@@ -62,40 +62,42 @@ function readMNISTfile(fname,lines)
 	local data = torch.Tensor(lines,784):fill(0)
 	local f    = torch.DiskFile(fname,'r')
 	for i=1,lines do 
-		data[i] = torch.Tensor(f:readDouble(784))
+		data[i]:copy(torch.DoubleTensor(f:readDouble(784)))
 	end
 	return data
 end
 
 --Download data and setup directory
-function getBinarizedMNIST()
+function getBinarizedMNIST(rootdir)
 	--Get train & valid. Append them
-	if not paths.dirp('./binarizedMNIST') then 
-		paths.mkdir('./binarizedMNIST')
+	if not paths.dirp(paths.concat(rootdir,'binarizedMNIST')) then 
+		paths.mkdir(paths.concat(rootdir,'binarizedMNIST'))
 	end
 	print ('Downloading data...')
-	os.execute('wget -O ./binarizedMNIST/binarized_mnist_train.amat http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_train.amat')		
-	os.execute('wget -O ./binarizedMNIST/binarized_mnist_valid.amat http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_valid.amat') 
-	os.execute('wget -O ./binarizedMNIST/binarized_mnist_test.amat http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_test.amat')
+	os.execute('wget -O ' .. paths.concat(rootdir,'binarizedMNIST/binarized_mnist_train.amat') .. ' http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_train.amat')		
+	os.execute('wget -O ' .. paths.concat(rootdir,'binarizedMNIST/binarized_mnist_valid.amat') .. ' http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_valid.amat') 
+	os.execute('wget -O ' .. paths.concat(rootdir,'binarizedMNIST/binarized_mnist_test.amat') .. ' http://www.cs.toronto.edu/~larocheh/public/datasets/binarized_mnist/binarized_mnist_test.amat')
 	print ('Converting data to torch format...')
-	test  = readMNISTfile('./binarizedMNIST/binarized_mnist_test.amat',10000)
-	train = readMNISTfile('./binarizedMNIST/binarized_mnist_train.amat',50000)
-	valid = readMNISTfile('./binarizedMNIST/binarized_mnist_valid.amat',10000)
+	test  = readMNISTfile(paths.concat(rootdir,'binarizedMNIST/binarized_mnist_test.amat'),10000)
+	train = readMNISTfile(paths.concat(rootdir,'binarizedMNIST/binarized_mnist_train.amat'),50000)
+	valid = readMNISTfile(paths.concat(rootdir,'binarizedMNIST/binarized_mnist_valid.amat'),10000)
 	print ('Saving data...')
-	torch.save('./binarizedMNIST/train.t7',train)
-	torch.save('./binarizedMNIST/test.t7',test)
-	torch.save('./binarizedMNIST/valid.t7',valid)
+	torch.save(paths.concat(rootdir,'binarizedMNIST/train.t7'),train)
+	torch.save(paths.concat(rootdir,'binarizedMNIST/test.t7'),test)
+	torch.save(paths.concat(rootdir,'binarizedMNIST/valid.t7'),valid)
 end
 
 --Load standard MNIST data
-function loadBinarizedMNIST(cuda)
-	if not paths.dirp('./binarizedMNIST') or not paths.filep('./binarizedMNIST/valid.t7') or not paths.filep('./binarizedMNIST/test.t7') or not paths.filep('./binarizedMNIST/train.t7') then 
-		getBinarizedMNIST()
+function loadBinarizedMNIST(cuda,rootdir)
+	local rootdir = rootdir or './'
+	--print('data directory = ' .. rootdir)
+	if (not paths.filep(paths.concat(rootdir,'binarizedMNIST/valid.t7'))) or (not paths.filep(paths.concat(rootdir,'binarizedMNIST/test.t7'))) or (not paths.filep(paths.concat(rootdir,'binarizedMNIST/train.t7'))) then 
+		getBinarizedMNIST(rootdir)
 	end
 	print ('Loading Binarized MNIST dataset')
-	local train = torch.load('./binarizedMNIST/train.t7')
-	local test  = torch.load('./binarizedMNIST/test.t7')
-	local valid = torch.load('./binarizedMNIST/valid.t7')
+	local train = torch.load(paths.concat(rootdir,'binarizedMNIST/train.t7'))
+	local test  = torch.load(paths.concat(rootdir,'binarizedMNIST/test.t7'))
+	local valid = torch.load(paths.concat(rootdir,'binarizedMNIST/valid.t7'))
 	local dataset = {}
 	dataset.train_x = torch.cat(train,valid,1)
 	dataset.test_x  = test
