@@ -1,156 +1,172 @@
-require 'nn'
-require 'nngraph'
+require 'nn';
 
 local PlanarFlow, parent = torch.class('nn.PlanarFlow', 'nn.Module')
 
-
-local function DotProduct(x,y)
-	return nn.Sum(2)(nn.CMulTable()({x,y})) --TODO only works for batch right now
-end
-
-function PlanarFlow:__init(dimension,deep_params,logpz_flag,beta)
+function PlanarFlow:__init(dimension)
 	parent.__init(self)
-	self.size = torch.LongStorage()
+	assert(dimension ~= nil,"must specify dimension")
+	assert(type(dimension) == 'number',"dimension must be a number")
 	self.dimension = dimension
 	self.train = true
-	self.logpz_flag = logpz_flag or false
-	self.beta = beta or 1 -- annealing
 	self.KL = 0
-	self.logdetJacobian = 0
-	self.logpz = 0
-	self.deep_params = deep_params or false
+	self.logdetJ = torch.Tensor(1)
+	self.weight = torch.Tensor(dimension*2)
+	self.bias = torch.Tensor(1)
+	self.gradWeight = torch.Tensor(dimension*2)
+	self.gradBias = torch.Tensor(1)
+	self.output = torch.Tensor(dimension)
+	self.gradInput = torch.Tensor(dimension)
+end
 
-	assert(dimension ~= nil, "must specify dimension")
+function PlanarFlow:getweights()
+	local u,w = unpack(self.weight:split(self.dimension))
+	local b = self.bias[1]
+	local du,dw = unpack(self.gradWeight:split(self.dimension))
+	local db = self.gradBias
+	return u,w,b,du,dw,db
+end
 
-	-- define graph of flow
-	local z = nn.Identity()()
-	local w_in = nn.Identity()()
-	local b_in = nn.Identity()()
-	local u_in = nn.Identity()()
-	local w,b,u
-	if deep_params then
-		w = w_in
-		b = b_in
-		u = u_in
+function PlanarFlow:updateOutput(input)
+	assert(input ~= nil, "input cannot be nil")
+	assert(input:nDimension() <= 2, "input must be a 1d (single) or 2d (batch) tensor")
+
+	-- declare local variables
+	local output = self.output:resizeAs(input)
+	local logdetJ = self.logdetJ
+	local u,w,b,_,_,_ = self:getweights()
+
+	-- calculate f(z) and log|J|
+	local u_hat = u:clone()
+	local wTu = torch.dot(w,u) 
+	local m = -1 + torch.log(1+torch.exp(wTu))
+	local wTw = torch.dot(w,w) + 1e-12
+	u_hat:copy(u)
+	u_hat:add(w*(m-wTu)/wTw)
+
+	if input:nDimension() == 2 then
+		local h = torch.mv(input,w)
+		h:add(b)
+		h:tanh()
+		logdetJ:resize(input:size(1)):copy(h)
+		output:ger(h,u_hat)
 	else
-		w = nn.CMul(self.dimension)(w_in)
-		b = nn.CMul(1)(b_in)
-		u = nn.CMul(self.dimension)(u_in)
+		local h = torch.tanh(torch.dot(input,w)+b)
+		logdetJ:resize(1):fill(h)
+		output:copy(u_hat):mul(h)
 	end
-	local wTz = DotProduct(w,z)
-	local wTz_b = nn.CAddTable()({wTz,b})
-	local h = nn.Replicate(self.dimension,1,0)(nn.Tanh()(wTz_b)) --TODO would this work for SGD?
-	-- enforce w*u_hat >= -1
-	local wTu = DotProduct(w,u)
-	local m = nn.MulConstant(-1)(nn.AddConstant(1)(nn.LogSigmoid()(nn.MulConstant(-1)(wTu))))
-	local w_normsq = nn.Sum(2)(nn.Square()(w)) --TODO only works for batch right now
-	local val1 = nn.CSubTable()({m,wTu})
-	local val2 = nn.CDivTable()({val1,w_normsq})
-	local val3 = nn.Replicate(self.dimension,1,0)(val2) --TODO would this work for SGD?
-	local val4 = nn.CMulTable()({w,val3})
-	local u_hat = nn.CAddTable()({u,val4})
-	local uh = nn.CMulTable()({u_hat,h})
-	-- add stuff to self for debugging
-	self.u = u
-	self.u_hat = u_hat
-	self.w = w
-	self.uh = uh
-	self.b = b
-	self.h = h
-	-- z_out = z + u_hat * h
-	local z_out = nn.CAddTable()({z,uh})
-	-- logdetJacobian = log|1+u*psi(z)|
-	-- psi = dhdz * w
-	local psi = nn.CMulTable()({w,nn.AddConstant(1)(nn.MulConstant(-1)(nn.Square()(h)))})
-	local logdetJ = nn.MulConstant(-1)(nn.Log()(nn.Abs()(nn.AddConstant(1)(DotProduct(psi,u_hat)))))
-	-- logpz = Elog(p(z)) = E[log(zTz)]
-	if self.logpz_flag then
-		local logpz = nn.AddConstant(0.5*self.dimension*math.log(2*math.pi))(nn.MulConstant(0.5)(nn.Sum(2)(nn.Square()(z_out)))) --TODO only works for batch
-		self.flow = nn.gModule({z,w_in,b_in,u_in},{z_out,logdetJ,logpz})
-	else
-		self.flow = nn.gModule({z,w_in,b_in,u_in},{z_out,logdetJ})
-	end
-end 
+	output:add(input)
+	logdetJ:pow(2):mul(-1):add(1):mul(torch.dot(w,u_hat)):add(1+1e-12):abs():log():mul(-1)
+	self.KL = logdetJ
+	self.logdetJ = logdetJ
 
-function PlanarFlow:parameters()
-	return self.flow:parameters()
+	self.output = output
+	return output
 end
 
-function PlanarFlow:cuda()
-	self.flow = self.flow:cuda()
-	return self:type('torch.CudaTensor')
-end
-
-function PlanarFlow:setAnnealing(beta)
-	self.beta = beta or 1
-end
-
---Forward pass
-function PlanarFlow:updateOutput(input)	
-	local z,w_in,b_in,u_in
-	if type(input) == 'table' then
-		errmsg = 'if input to PlanarFlow is table, then input must contain 4 tensors: z,w,b,u'
-		assert(input[1] ~= nil, errmsg)
-		assert(input[2] ~= nil, errmsg)
-		assert(input[3] ~= nil, errmsg)
-		assert(input[4] ~= nil, errmsg)
-		z = input[1]
-		w_in = input[2]
-		b_in = input[3]
-		u_in = input[4]
-	else
-		z = input
-		w_in = torch.ones(z:size()):type(z:type())
-		b_in = torch.ones(z:size(1)):type(z:type()) -- TODO: only works in batch setting
-		u_in = torch.ones(z:size()):type(z:type())
-	end
-	assert(z:nDimension() == 2, 'z must be 2 dimensional: batchSize x num_latent_states')
-	local one = torch.ones(z:size(1)):type(z:type())
-	local z_out, logdetJ, logpz = unpack(self.flow:forward({z,w_in,b_in,u_in}))
-	self.logdetJacobian = logdetJ
-	self.logpz = logpz or 0
-	self.output = z_out
-	-- accumulate KL
-	self.KL = logdetJ + self.logpz
-	
-    return self.output
-end
-
---Backward pass
 function PlanarFlow:updateGradInput(input, gradOutput)
-	local z,w_in,b_in,u_in
-	if type(input) == 'table' then
-		errmsg = 'if input to PlanarFlow is table, then input must contain 4 tensors: z,w,b,u'
-		assert(input[1] ~= nil, errmsg)
-		assert(input[2] ~= nil, errmsg)
-		assert(input[3] ~= nil, errmsg)
-		assert(input[4] ~= nil, errmsg)
-		z = input[1]
-		w_in = input[2] 
-		b_in = input[3]
-		u_in = input[4] 
+	local u,w,b,_,_,_ = self:getweights()
+
+	-- calculate u_hat
+	local u_hat = u:clone()
+	local wTu = torch.dot(w,u) 
+	local m = -1 + torch.log(1+torch.exp(wTu))
+	local wTw = torch.dot(w,w) + 1e-12
+	u_hat:copy(u)
+	u_hat:add(w*(m-wTu)/wTw)
+
+	local gradInput = self.gradInput:resizeAs(input)
+	if input:nDimension() == 2 then
+		local batchSize = input:size(1)
+		local h = torch.mv(input,w)
+		h:add(b)
+		h:tanh()
+		local dh = torch.pow(h,2):mul(-1):add(1)
+		-- gradient w.r.t. log(p(x|z))
+		gradInput:ger(torch.mv(gradOutput,u_hat):cmul(dh),w)
+		gradInput:add(gradOutput)
+
+		local wTu_hat = torch.dot(w,u_hat)
+		-- gradient w.r.t. log|J|
+		gradInput:add(torch.ger(h:cmul(dh):mul(2*wTu_hat):cdiv(dh:mul(wTu_hat):add(1+1e-12)),w))
+
 	else
-		z = input
-		w_in = torch.ones(z:size()):type(z:type())
-		b_in = torch.ones(z:size(1)):type(z:type()) -- TODO: only works in batch setting
-		u_in = torch.ones(z:size()):type(z:type())
+		local h = torch.tanh(torch.dot(input,w)+b)
+		local dh = 1-h^2
+		-- gradient w.r.t. log(p(x|z))
+		gradInput:mv(torch.ger(w,u_hat),gradOutput):mul(dh)
+		gradInput:add(gradOutput)
+
+		local wTu_hat = torch.dot(w,u_hat)
+		-- gradient w.r.t. log|J|
+		gradInput:add(w*2*wTu_hat*h*dh/(1+1e-12+wTu_hat*dh))
 	end
-	assert(z:nDimension() == 2, 'z must be 2 dimensional: batchSize x num_latent_states')
-	local one = torch.ones(z:size(1)):type(z:type())
-	if self.logpz_flag then 
-		dz, dw, db, du = unpack(self.flow:backward({z,w_in,b_in,u_in},{gradOutput,one,one*self.beta}))
-	else
-		dz, dw, db, du = unpack(self.flow:backward({z,w_in,b_in,u_in},{gradOutput,one}))
-	end
-	if type(input) == 'table' then
-		self.gradInput = {dz,dw,db,du}
-	else
-		self.gradInput = dz
-	end
-    return self.gradInput
+
+	self.gradInput = gradInput
+	return gradInput
 end
 
 
+function PlanarFlow:accGradParameters(input, gradOutput, scale)
+	scale = scale or 1
 
+	local u,w,b,du,dw,db = self:getweights()
+
+	local u_hat = u:clone()
+	local wTu = torch.dot(w,u) 
+	local m = -1 + torch.log(1+torch.exp(wTu))
+	local wTw = torch.dot(w,w) + 1e-12
+	u_hat:copy(u)
+	u_hat:add(w*(m-wTu)/wTw)
+	local wTu_hat = torch.dot(w,u_hat)
+
+	if input:nDimension() == 2 then
+		local batchSize = input:size(1)
+		local h = torch.mv(input,w)
+		h:add(b)
+		h:tanh()
+		local dh = torch.pow(h,2):mul(-1):add(1)
+
+		-- gradient log(p(x|z)) w.r.t. u
+		local hdf = torch.mv(gradOutput:t(),h)
+		du:add(hdf*scale)
+		du:add(-w*(torch.dot(w,hdf)/wTw*torch.sigmoid(-wTu)*scale))
+
+		-- gradient log|J| w.r.t. u
+		local dlogJdu = dh*wTu_hat
+		dlogJdu:add(1+1e-12)
+		dlogJdu:cdiv(dh,dlogJdu)
+		du:add(-w*(dlogJdu:sum()*torch.sigmoid(wTu)*scale))
+
+		-- gradient log(p(x|z)) w.r.t. w
+		local wThdf = torch.dot(w,hdf)
+		dw:add(u*(-torch.sigmoid(-wTu)/wTw*wThdf*scale))
+		local val = (m-wTu)/wTw
+		dw:add(w*(-2*val*wThdf/wTw*scale))
+		dw:add(hdf*(val*scale))
+		dw:addmv(scale,input:t(),torch.mv(gradOutput,u_hat):cmul(dh))
+
+		-- gradient log|J| w.r.t. w
+		local val = dlogJdu:sum()
+		dw:add(u*(val*(torch.sigmoid(-wTu)-1)*scale))
+		dw:addmv(2*wTu_hat*scale,input:t(),torch.cmul(dlogJdu,h))
+
+		-- gradient log(p(x|z)) w.r.t. b
+		db:add(torch.dot(u_hat,torch.mv(gradOutput:t(),dh))*scale)
+		-- gradient log|J| w.r.t. b
+		db:add(2*torch.dot(dlogJdu,h)*wTu_hat*scale)
+
+
+
+	else
+		error('this has not been implemented yet for 1d inputs')
+		local h = torch.tanh(torch.dot(input,w)+b)
+		local dh = 1-h^2
+		-- gradient w.r.t. log(p(x|z))
+
+		local wTu_hat = torch.dot(w,u_hat)
+		-- gradient w.r.t. log|J|
+	end
+
+end
 
 

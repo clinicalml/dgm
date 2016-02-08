@@ -12,28 +12,32 @@ function GaussianReparam:__init(dimension,noiseparam)
 	self.KL = 0
 end 
 
+function GaussianReparam:fixeps(fixed)
+	self.fixed = fixed
+end
+
 --Forward pass
 function GaussianReparam:updateOutput(input)	
-	if input[1]:dim()==1 then  --SGD setting 
-		if not self.dimension then self.dimension = input[1]:size(1) end
-	elseif input[1]:dim()==2 then --Batch setting 
-		if not self.dimension then self.dimension = input[1]:size(2) end 
-	else
-		error('Input must be a vector or a matrix')
-	end	
-	--Treat input[2] as log sigma^2
-	self.eps = torch.randn(input[1]:size()):typeAs(input[1])
-	local noise = torch.randn(input[1]:size()):typeAs(input[1])
+	assert(input[1]:dim() <= 2, 'input must be a table of two 1d or 2d tensors with the same size')
+	assert(input[2]:dim() <= 2, 'input must be a table of two 1d or 2d tensors with the same size')
 
+	--Treat input[2] as log sigma^2
+	if (not self.fixed) or (not self.eps) then
+		self.eps = torch.randn(input[1]:size()):typeAs(input[1])
+	end
 	self.output = torch.exp(input[2]*0.5):cmul(self.eps):add(input[1])
 	local kl = (input[2] + 1):mul(-1)
-	self.KL = kl:sum(2)*0.5 - 0.5*self.dimension*math.log(2*math.pi)
+	if input[1]:dim() == 1 then
+		self.KL = kl:sum()*0.5 - 0.5*self.dimension*math.log(2*math.pi)
+	else
+		self.KL = kl:sum(2)*0.5 - 0.5*self.dimension*math.log(2*math.pi)
+	end
 
 	--Add noise to output during training 
-	if not self.train then
-		noise:fill(0)
+	if self.train then
+		local noise = torch.randn(input[1]:size()):typeAs(input[1])
+		self.output:add(noise*self.noiseparam)
 	end
-	self.output:add(noise*self.noiseparam)
     return self.output
 end
 
