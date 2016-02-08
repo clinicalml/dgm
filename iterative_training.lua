@@ -7,9 +7,9 @@ require "cutorch"
 require "optim"
 require "GaussianReparam_normflow"
 require "PlanarFlow"
+require "NormalizingFlow"
 require "Maxout"
 require 'hdf5'
-require 'rmsprop'
 disp = require "display"
 
 opt.devicenum = opt.devicenum or 2
@@ -85,15 +85,17 @@ for L = 0, opt.len_normflow do
 	local dim_stochastic  = opt.dim_stochastic
 	local maxoutWindow    = opt.maxoutWindow
 	q0_inp = nn.Identity()()
-	if opt.dropout then
-		q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q0_inp))
-		q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_1))
-	else
-		q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(q0_inp)
-		q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_hid_1)
-	end
-	mu  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_2)
-	logsigma  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_2)
+    if opt.dropout then
+        q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q0_inp))
+        q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_1))
+        q_hid_3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_2))
+    else
+        q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(q0_inp)
+        q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_hid_1)
+        q_hid_3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_hid_2)
+    end
+	mu  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_3)
+	logsigma  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_3)
 	reparam   = nn.GaussianReparam(dim_stochastic)
 	z  = reparam({mu,logsigma})
 	q0_model = nn.gModule({q0_inp},{z})
@@ -111,29 +113,15 @@ for L = 0, opt.len_normflow do
 		flow_inp = nn.Identity()()
 		flow = {}
 		flow[0] = flow_inp
+		flow = nn.NormalizingFlow()
 		for k = 1,L do
-			if k == L then logpz_flag = true else logpz_flag = false end
-			if opt.deepParams then
-				error('cannot yet handle deep parameters')
-				w_in = nn.Maxout(dim_hidden,dim_stochastic,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_2))
-				b_in = nn.Maxout(dim_hidden,1,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_2))
-				u_in = nn.Maxout(dim_hidden,dim_stochastic,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_2))
-				flow[k] = nn.PlanarFlow(dim_stochastic,true,logpz_flag)({flow[k-1],w_in,b_in,u_in})
-			else
-				flow[k] = nn.PlanarFlow(dim_stochastic,false,logpz_flag)(flow[k-1])
-			end
+			flow:add(nn.PlanarFlow(dim_stochastic))
 		end
-		for k = 1,L-1 do
-			local fp,fdp = flow[k].data.module:getParameters()
-			fp:copy(bfp[k])
-		end
-		local fpL,_ = flow[L].data.module:getParameters()
-		fpL:uniform(-0.5,0.5):mul(opt.flow_init)
-
-		flow_model = nn.gModule({flow_inp},{flow[L]})
+		fp, _ = flow:getParameters()
+		fp:uniform(-0.5,0.5):mul(opt.flow_init)
 
 		local var_inp = nn.Identity()()
-		var_model = nn.gModule({var_inp},{flow_model(q0_model(var_inp))})
+		var_model = nn.gModule({var_inp},{flow(q0_model(var_inp))})
 	else
 		local var_inp = nn.Identity()()
 		var_model = nn.gModule({var_inp},{q0_model(var_inp)})
@@ -141,15 +129,19 @@ for L = 0, opt.len_normflow do
 
 	--------- Generative Network -------------
 	gen_inp = nn.Identity()()
-	if opt.dropout then
-		hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(gen_inp))
-		hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(hid1))
-		reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid2))
-	else
-		hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(gen_inp)
-		hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid1)
-		reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid2))
-	end
+    if opt.dropout then
+        hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(gen_inp))
+        hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(hid1))
+        hid3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(hid2))
+        hid4 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(hid3))
+        reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid4))
+    else
+        hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(gen_inp)
+        hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid1)
+        hid3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid2)
+        hid4 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid3)
+        reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid4))
+    end
 	gen_model = nn.gModule({gen_inp},{reconstr})
 
 	-- copy baseline model parameters
@@ -181,7 +173,6 @@ for L = 0, opt.len_normflow do
 	model.z           = z
 	model.q0_model    = q0_model
 	model.flow        = flow
-	model.flow_model  = flow_model
 	model.var_model   = var_model
 	model.gen_model   = gen_model
 	model.mlp         = mlp
@@ -193,5 +184,5 @@ for L = 0, opt.len_normflow do
 	collectgarbage()
 
 	---------- Run ----------------
-	dofile 'train_planarflow2.lua'
+	dofile 'train_planarflow.lua'
 end
