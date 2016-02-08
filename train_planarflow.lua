@@ -7,7 +7,7 @@ require "cutorch"
 require "optim"
 require 'hdf5'
 require 'rmsprop'
-require "PlanarFlow3"
+require "PlanarFlow"
 require "Maxout"
 require 'NormalizingFlow'
 disp = require "display"
