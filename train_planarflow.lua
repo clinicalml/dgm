@@ -20,7 +20,7 @@ opt.savebestmodel = opt.savebestmodel or true
 opt.annealing     = opt.annealing or false
 opt.optimMethod   = opt.optimMethod or 'adam'
 opt.datadir       = opt.datadir or './'
-opt.numepochs     = opt.numepochs or 833
+opt.numepochs     = opt.numepochs or 1000
 
 opt.devicenum     = opt.devicenum or 1
 cutorch.setDevice(opt.devicenum)
@@ -36,7 +36,7 @@ opt.dropout        = opt.dropout or false
 opt.maxoutWindow   = opt.maxoutWindow or 4
 opt.deepParams     = opt.deepParams or false
 opt.len_normflow   = opt.len_normflow or 1
-opt.S              = opt.S or 200  -- num samples used to estimate -log(p(v)) in estimate_logpv
+opt.S              = opt.S or 200  -- num samples used to estimate -log(p(v)) in importanceSampling
 opt.init_std       = opt.init_std or 1e-3
 opt.flow_init      = opt.flow_init or opt.init_std
 
@@ -75,12 +75,14 @@ else
 	if opt.dropout then
 		q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q0_inp))
 		q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_1))
+		q_hid_3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(q_hid_2))
 	else
 		q_hid_1 = nn.Maxout(dim_input,dim_hidden,maxoutWindow)(q0_inp)
 		q_hid_2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_hid_1)
+		q_hid_3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(q_hid_2)
 	end
-	mu  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_2)
-	logsigma  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_2)
+	mu  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_3)
+	logsigma  = nn.Linear(dim_hidden,dim_stochastic)(q_hid_3)
 	reparam   = nn.GaussianReparam(dim_stochastic)
 	z = reparam({mu,logsigma})
 	q0_model = nn.gModule({q0_inp},{z})
@@ -107,11 +109,15 @@ else
 	if opt.dropout then
 		hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(gen_inp))
 		hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(hid1))
-		reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid2))
+		hid3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(hid2))
+		hid4 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(nn.Dropout(opt.dropout)(hid3))
+		reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid4))
 	else
 		hid1 = nn.Maxout(dim_stochastic,dim_hidden,maxoutWindow)(gen_inp)
 		hid2 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid1)
-		reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid2))
+		hid3 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid2)
+		hid4 = nn.Maxout(dim_hidden,dim_hidden,maxoutWindow)(hid3)
+		reconstr = nn.Sigmoid()(nn.Linear(dim_hidden,dim_input)(hid4))
 	end
 	gen_model = nn.gModule({gen_inp},{reconstr})
 	gp, _ = gen_model:getParameters()
@@ -179,29 +185,41 @@ function KL(beta)
 end
 
 function LogDetJ()
-	local logdetJ = flow:getlogdetJ() or 0
-	if type(logdetJ) == 'number' then
-		return logdetJ
+	if flow then
+		local logdetJ = flow:getlogdetJ() or 0
+		if type(logdetJ) == 'number' then
+			return logdetJ
+		else
+			return logdetJ:sum()
+		end
 	else
-		return logdetJ:sum()
+		return 0
 	end
 end
 
 function Logpz()
-	local logpz = flow.logpz or 0
-	if type(logpz) == 'number' then
-		return logpz
+	if flow then
+		local logpz = flow.logpz or 0
+		if type(logpz) == 'number' then
+			return logpz
+		else
+			return logpz:sum()
+		end
 	else
-		return logpz:sum()
+		return 0
 	end
 end
 
 function Logqz0()
-	local logqz0 = reparam.KL
-	if type(logqz0) == 'number' then
-		return logqz0
+	if flow then
+		local logqz0 = reparam.KL
+		if type(logqz0) == 'number' then
+			return logqz0
+		else
+			return logqz0:sum()
+		end
 	else
-		return logqz0:sum()
+		return 0
 	end
 end
 
@@ -229,11 +247,11 @@ function eval(dataset)
 end
 --------- Estimate logp(v) via importance sampling ---------
 -- see appendix E in Rezende, D. J., Mohamed, S., and Wierstra, D. Stochastic backpropagation and approximate inference in deep generative models. In ICML, 2014.
-function estimate_logpv(dataset,S)
+function importanceSampling(dataset,S)
         mlp:evaluate()
         local S = S or 200
         local N = dataset:size(1)
-        local batchSize = 500
+        local batchSize = 1000
         local logpv = 0
         local logp   = torch.FloatTensor(batchSize,S)
         for b = 1, N, batchSize do
@@ -370,6 +388,7 @@ for epoch =1,opt.numepochs do
 				batchupperbound = nll*beta + kl
 			end
 			avggrad:add(gradients/N)
+			batchgradnormlist = updateList(batchgradnormlist,gradients:norm())
             return batchupperbound, gradients
         end
 
@@ -399,8 +418,8 @@ for epoch =1,opt.numepochs do
 
     if epoch % 10  == 0 then
     	print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
-		trainlogpv = estimate_logpv(data.train_x, opt.S)
-		testlogpv = estimate_logpv(data.test_x, opt.S)
+		trainlogpv = importanceSampling(data.train_x, opt.S)
+		testlogpv = importanceSampling(data.test_x, opt.S)
 		trainlogpv = trainlogpv*(-1)
 		testlogpv = testlogpv*(-1)
 		print("logp = " .. testlogpv) 
@@ -467,6 +486,7 @@ for epoch =1,opt.numepochs do
 		writeFile:write('logqz0',logqz0list)
 		writeFile:write('pnorm',pnormlist)
 		writeFile:write('gradnorm',gradnormlist)
+		writeFile:write('batchgradnorm',batchgradnormlist)
 		writeFile:write('avggrad',avggradlist)
 		writeFile:close()
 		local s,mp = getsamples()
