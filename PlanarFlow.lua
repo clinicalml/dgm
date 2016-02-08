@@ -40,8 +40,7 @@ function PlanarFlow:updateOutput(input)
 	local wTu = torch.dot(w,u) 
 	local m = -1 + torch.log(1+torch.exp(wTu))
 	local wTw = torch.dot(w,w) + 1e-12
-	u_hat:copy(u)
-	u_hat:add(w*(m-wTu)/wTw)
+	u_hat:add(w*((m-wTu)/wTw))
 
 	if input:nDimension() == 2 then
 		local h = torch.mv(input,w)
