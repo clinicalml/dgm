@@ -9,6 +9,7 @@ function NormalizingFlow:__init()
 	self.logdetJ = torch.Tensor()
 	self.logpz = torch.Tensor()
 	self.beta = 1
+	self.gradOutput = torch.Tensor()
 end
 
 
@@ -58,7 +59,7 @@ function NormalizingFlow:getKL(beta)
 			self.KL:add(self.modules[i].KL)
 		end
 	end
-	if beta ~= 1 or beta == nil then
+	if beta == 1 or beta == nil then
 		self.KL:add(self:getlogpz())
 	else
 		self.KL:add(self:getlogpz()*beta)
@@ -67,6 +68,7 @@ function NormalizingFlow:getKL(beta)
 end
 
 function NormalizingFlow:setAnnealing(beta)
+	-- this only impacts gradient calculations
 	self.beta = beta or 1
 end
 
@@ -80,44 +82,48 @@ end
 function NormalizingFlow:updateGradInput(input, gradOutput)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
-	local gradOutput = gradOutput + self.output
+	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
 	if self.beta ~= 1 then
-		gradOutput:mul(self.beta)
+		self.gradOutput:add(self.beta,self.output)
+	else
+		self.gradOutput:add(self.output)
 	end
-	return parent.updateGradInput(self,input,gradOutput)
-	--return parent.updateGradInput(self,input,gradOutput)
+	return parent.updateGradInput(self,input,self.gradOutput)
 end
 
 function NormalizingFlow:accGradParameters(input, gradOutput)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
-	local gradOutput = gradOutput + self.output
+	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
 	if self.beta ~= 1 then
-		gradOutput:mul(self.beta)
+		self.gradOutput:add(self.beta,self.output)
+	else
+		self.gradOutput:add(self.output)
 	end
-	return parent.accGradParameters(self,input,gradOutput)
-	--return parent.accGradParameters(self,input,gradOutput)
+	return parent.accGradParameters(self,input,self.gradOutput)
 end
 
 function NormalizingFlow:backward(input, gradOutput, scale)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
-	local gradOutput = gradOutput + self.output
+	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
 	if self.beta ~= 1 then
-		gradOutput:mul(self.beta)
+		self.gradOutput:add(self.beta,self.output)
+	else
+		self.gradOutput:add(self.output)
 	end
-	return parent.backward(self,input,gradOutput, scale)
-	--return parent.backward(self,input,gradOutput, scale)
+	return parent.backward(self,input,self.gradOutput, scale)
 end
 
 function NormalizingFlow:accUpdateGradParameters(input, gradOutput, lr)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
-	local gradOutput = gradOutput + self.output
+	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
 	if self.beta ~= 1 then
-		gradOutput:mul(self.beta)
+		self.gradOutput:add(self.beta,self.output)
+	else
+		self.gradOutput:add(self.output)
 	end
-	return parent.accUpdateGradParameters(self,input,gradOutput, lr)
-	--return parent.accUpdateGradParameters(self,input,gradOutput, lr)
+	return parent.accUpdateGradParameters(self,input,self.gradOutput, lr)
 end
 
