@@ -18,6 +18,7 @@ opt.myname        = opt.myname or "planarflow1"
 opt.savedir       = opt.savedir or "save_planarflow1"
 opt.savebestmodel = opt.savebestmodel or true
 opt.annealing     = opt.annealing or false
+opt.anneal_iters  = opt.anneal_iters or 10000
 opt.optimMethod   = opt.optimMethod or 'adam'
 opt.datadir       = opt.datadir or './'
 opt.numepochs     = opt.numepochs or 1000
@@ -169,6 +170,7 @@ beta = 1 --annealing
 
 ---------  Aggregate contributions to KL in flow  ---------
 function KL(beta)
+	local beta = beta or 1
 	local KL = reparam.KL
 	if flow then
 		if beta ~= 1 then
@@ -248,56 +250,58 @@ end
 --------- Estimate logp(v) via importance sampling ---------
 -- see appendix E in Rezende, D. J., Mohamed, S., and Wierstra, D. Stochastic backpropagation and approximate inference in deep generative models. In ICML, 2014.
 function importanceSampling(dataset,S)
-        mlp:evaluate()
-        local S = S or 200
-        local N = dataset:size(1)
-        local batchSize = 1000
-        local logpv = 0
-        local logp   = torch.FloatTensor(batchSize,S)
-        for b = 1, N, batchSize do
-            local start  = b
-            local finish = math.min(N,b+batchSize-1)
-            local x      = dataset[{{start,finish}}]
-            logp:resize(finish-start+1,S)
-            for s = 1,S do
-                collectgarbage()
-                local probs = mlp:forward(x)
-                -- ll = log(p(v|z_s)) ~ calc assumes each pixel output is conditional independent given latent states
-                local ll = (torch.cmul(torch.log(probs+1e-12),x)+torch.cmul(torch.log(probs*(-1)+1+1e-12),x*(-1)+1)):sum(2)
+	local start = sys.clock()
+	mlp:evaluate()
+	local S = S or 200
+	local N = dataset:size(1)
+	local batchSize = 1000
+	local logpv = 0
+	local logp   = torch.FloatTensor(batchSize,S)
+	for b = 1, N, batchSize do
+		local start  = b
+		local finish = math.min(N,b+batchSize-1)
+		local x      = dataset[{{start,finish}}]
+		logp:resize(finish-start+1,S)
+		for s = 1,S do
+			collectgarbage()
+			local probs = mlp:forward(x)
+			-- ll = log(p(v|z_s)) ~ calc assumes each pixel output is conditional independent given latent states
+			local ll = (torch.cmul(torch.log(probs+1e-12),x)+torch.cmul(torch.log(probs*(-1)+1+1e-12),x*(-1)+1)):sum(2)
 
-                -- z_s = sampled z|v
-				local z_s = var_model.output
+			-- z_s = sampled z|v
+			local z_s = var_model.output
 
-                -- logprior is standard normal (note that the -n*0.5*log2pi cancels out with logq)
-                local logprior = torch.cmul(z_s,z_s):sum(2)*(-0.5)
+			-- logprior is standard normal (note that the -n*0.5*log2pi cancels out with logq)
+			local logprior = torch.cmul(z_s,z_s):sum(2)*(-0.5)
 
-                -- epsilon
-                local eps = z.data.module.eps
+			-- epsilon
+			local eps = z.data.module.eps
 
-                -- assume logsigma is log(sigma^2)
-                local logsig2 = logsigma.data.module.output
-                local logq0 = torch.cmul(eps,eps):sum(2)*(-0.5) + logsig2:sum(2)*(-0.5)
-				
-				local logq = logq0
-				if flow then
-					local logdetJ = flow:getlogdetJ() or 0
-					logq = logq + logdetJ
-				end
+			-- assume logsigma is log(sigma^2)
+			local logsig2 = logsigma.data.module.output
+			local logq0 = torch.cmul(eps,eps):sum(2)*(-0.5) + logsig2:sum(2)*(-0.5)
+			
+			local logq = logq0
+			if flow then
+				local logdetJ = flow:getlogdetJ() or 0
+				logq = logq + logdetJ
+			end
 
-                -- sum the terms together
-                local logp_s = ll+logprior-logq
+			-- sum the terms together
+			local logp_s = ll+logprior-logq
 
-                -- logp = [logp_1,...,logp_S]
-                logp[{{},s}]:copy(logp_s:float())
-            end
-            local a = logp:max(2)
-            --compute logsumexp: https://hips.seas.harvard.edu/blog/2013/01/09/computing-log-sum-exp/
-            local logsumexp = a + torch.log(torch.exp(logp-nn.Replicate(S,2):cuda():forward(a)):sum(2)) - math.log(S)
-            logpv = logsumexp:sum() + logpv
-        end
-        logpv = logpv / N
-        mlp:training()
-        return logpv
+			-- logp = [logp_1,...,logp_S]
+			logp[{{},s}]:copy(logp_s:float())
+		end
+		local a = logp:max(2)
+		--compute logsumexp: https://hips.seas.harvard.edu/blog/2013/01/09/computing-log-sum-exp/
+		local logsumexp = a + torch.log(torch.exp(logp-nn.Replicate(S,2):cuda():forward(a)):sum(2)) - math.log(S)
+		logpv = logsumexp:sum() + logpv
+	end
+	logpv = logpv / N
+	mlp:training()
+	print('Importance Sampling Time: ' .. sys.clock() - start)
+	return logpv
 end
 
 
@@ -363,10 +367,15 @@ for epoch =1,opt.numepochs do
             mlp:zeroGradParameters()
             probs = mlp:forward(batch)
             local nll = crit:forward(probs, batch)
+			local kl = KL()
+            local batchupperbound = nll + kl
+			upperbound = upperbound + batchupperbound
+
             local df_dw = crit:backward(probs, batch)
 			--annealing
 			if opt.annealing then
-				beta = math.min(1,0.01 + t_beta/10000) 
+				beta = math.min(1,0.01 + t_beta/opt.anneal_iters) 
+				df_dw = df_dw*beta
 				if flow then
 					flow:setAnnealing(beta)
 				else
@@ -375,20 +384,21 @@ for epoch =1,opt.numepochs do
 				t_beta = t_beta+1--batchSize
 			end
             mlp:backward(batch,df_dw)
-			local kl = KL()
-            local batchupperbound = nll + kl
-			upperbound = upperbound + batchupperbound
+
+			-- update training set stats
 			trainKL = trainKL + kl
 			trainnll = nll + trainnll
 			logdetJ = LogDetJ() + logdetJ
 			logpz = Logpz() + logpz
 			logqz0 = Logqz0() + logqz0
+			avggrad:add(gradients/N)
+			batchgradnormlist = updateList(batchgradnormlist,gradients:norm())
+
+			-- if annealing, revise upperbound function
 			if opt.annealing then
 				local kl = KL(beta)
 				batchupperbound = nll*beta + kl
 			end
-			avggrad:add(gradients/N)
-			batchgradnormlist = updateList(batchgradnormlist,gradients:norm())
             return batchupperbound, gradients
         end
 
@@ -418,9 +428,9 @@ for epoch =1,opt.numepochs do
 
     if epoch % 10  == 0 then
     	print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
-		trainlogpv = importanceSampling(data.train_x, opt.S)
+		--trainlogpv = importanceSampling(data.train_x, opt.S)
 		testlogpv = importanceSampling(data.test_x, opt.S)
-		trainlogpv = trainlogpv*(-1)
+		--trainlogpv = trainlogpv*(-1)
 		testlogpv = testlogpv*(-1)
 		print("logp = " .. testlogpv) 
         if opt.savebestmodel then
@@ -467,7 +477,7 @@ for epoch =1,opt.numepochs do
 		testupperboundlist = updateList(testupperboundlist,testnll)
 		testKLlist         = updateList(testKLlist,testKL)
 		testlogpvlist      = updateList(testlogpvlist,testlogpv)
-		trainlogpvlist     = updateList(trainlogpvlist,trainlogpv)
+		--trainlogpvlist     = updateList(trainlogpvlist,trainlogpv)
 
 		sys.execute('mkdir -p ' .. opt.savedir)
 		torch.save(paths.concat(opt.savedir,'parameters.t7'), parameters)
@@ -477,7 +487,7 @@ for epoch =1,opt.numepochs do
 		writeFile = hdf5.open(paths.concat(opt.savedir,'upperbounds.h5'),'w')
 		writeFile:write('train',upperboundlist)
 		writeFile:write('test',testupperboundlist)
-		writeFile:write('train_logpv',trainlogpvlist)
+		--writeFile:write('train_logpv',trainlogpvlist)
 		writeFile:write('test_logpv',testlogpvlist)
 		writeFile:write('trainKL',trainKLlist)
 		writeFile:write('testKL',testKLlist)
