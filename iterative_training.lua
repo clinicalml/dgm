@@ -55,7 +55,7 @@ function deepcopy(x)
 	end
 end
 
-for L = 0, opt.len_normflow do
+for L = 1, opt.len_normflow do
 	print('=============> L =',L)
 	--------- Reset optimization parameters --------
 	opt.optimconfig = deepcopy(opt.optimconfig0)
@@ -68,13 +68,11 @@ for L = 0, opt.len_normflow do
 	end
 	--------- Load Params from Previous Training Iteration -----------
 	local bqp,bfp,bgp
-	if L > 0 then
+	if L > 1 then
 		bqp,_ = model.q0_model:getParameters()
 		bfp = {}
-		if L > 1 then
-			for t = 1, L-1 do
-				bfp[t],_ = model.flow[t].data.module:getParameters()
-			end
+		for t = 1, L-1 do
+			bfp[t],_ = model.flow.modules[t]:getParameters()
 		end
 		bgp,_ = model.gen_model:getParameters()
 	end
@@ -102,7 +100,7 @@ for L = 0, opt.len_normflow do
 
 	-- initialize recognition network by copying baseline model parameters
 	qp,_ = q0_model:getParameters()
-	if L > 0 then
+	if L > 1 then
 		qp:copy(bqp)
 	else
 		qp:copy(torch.randn(qp:size()):mul(opt.init_std))
@@ -117,8 +115,12 @@ for L = 0, opt.len_normflow do
 		for k = 1,L do
 			flow:add(nn.PlanarFlow(dim_stochastic))
 		end
-		fp, _ = flow:getParameters()
-		fp:uniform(-0.5,0.5):mul(opt.flow_init)
+		for k = 1,L-1 do
+			local fp,fdp = flow.modules[k]:getParameters()
+			fp:copy(bfp[k])
+		end
+		local fpL, _ = flow:getParameters()
+		fpL:uniform(-0.5,0.5):mul(opt.flow_init)
 
 		local var_inp = nn.Identity()()
 		var_model = nn.gModule({var_inp},{flow(q0_model(var_inp))})
@@ -146,7 +148,7 @@ for L = 0, opt.len_normflow do
 
 	-- copy baseline model parameters
 	gp,_ = gen_model:getParameters()
-	if L > 0 then
+	if L > 1 then
 		gp:copy(bgp)
 	else
 		gp:copy(torch.randn(gp:size()):mul(opt.init_std))
