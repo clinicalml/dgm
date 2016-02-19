@@ -10,7 +10,10 @@ cmd:option('-iter', 150)
 cmd:option('-finalepochs',1000)
 cmd:option('-reparamnoise',0.05)
 cmd:option('-learningrate',5e-4)
+cmd:option('-lrdecay',0)
 cmd:option('-annealing',false)
+cmd:option('-beta1',0.9)
+cmd:option('-beta2',0.999)
 
 
 opt = cmd:parse(arg)
@@ -36,6 +39,11 @@ opt.experiment     = opt.experiment .. 'flow' .. tostring(opt.len_normflow)
 opt.experiment     = opt.experiment .. '_iter' .. tostring(opt.epochs[1])
 opt.experiment     = opt.experiment .. '_noise' .. tostring(opt.reparamnoise)
 opt.experiment     = opt.experiment .. '_lr' .. tostring(opt.learningrate)
+if opt.lrdecay > 0 then
+	opt.experiment = opt.experiment .. 'decay' .. tostring(opt.lrdecay)
+end
+opt.experiment     = opt.experiment .. '_' .. tostring(opt.beta1) .. 'b1'
+opt.experiment     = opt.experiment .. '_' .. tostring(opt.beta2) .. 'b2'
 
 if opt.annealing then
 	opt.experiment = opt.experiment .. '_annealed'
@@ -47,7 +55,10 @@ opt.datadir        = '/scratch/jmj/dgm_maxout40'
 opt.optimMethod = 'adam'
 opt.optimconfig = {
 	learningRate = opt.learningrate,
-	momentum = 0.9
+	learningRate0 = opt.learningrate,
+	learningRateDecay = opt.lrdecay,
+	beta1 = opt.beta1,
+	beta2 = opt.beta2
 }
 
 sys.execute('mkdir -p ' .. opt.savedir)
