@@ -1,0 +1,9 @@
+#th exp15_baseline.lua     -devicenum 1 -genlayers 1 -gendim 200 -varlayers 1 -vardim 200
+th exp15_flow_iter.lua    -devicenum 1 -genlayers 1 -gendim 200 -varlayers 1 -vardim 200 -len_normflow 10
+
+#th exp15_baseline.lua     -devicenum 1 -genlayers 1 -gendim 200 -varlayers 2 -vardim 200
+th exp15_flow_iter.lua    -devicenum 1 -genlayers 1 -gendim 200 -varlayers 2 -vardim 200 -len_normflow 10
+
+#th exp15_baseline.lua     -devicenum 1 -genlayers 1 -gendim 200 -varlayers 4 -vardim 200
+th exp15_flow_iter.lua    -devicenum 1 -genlayers 1 -gendim 200 -varlayers 4 -vardim 200 -len_normflow 10
+
