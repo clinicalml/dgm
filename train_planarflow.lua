@@ -160,13 +160,6 @@ img_format,format = setupDisplay()
 setupFolder(opt.savedir)
 data.train_x = data.train_x:cuda()
 data.test_x  = data.test_x:cuda()
-config = opt.optimconfig or {
-    learningRate = 1e-5,
-}
-print(config)
-batchSize = 100
-state = {}
-beta = 1 --annealing
 
 ---------  Aggregate contributions to KL in flow  ---------
 function KL(beta)
@@ -330,7 +323,20 @@ end
 -------------- Training Loop -------------
 local t_beta = 0 -- annealing index
 local avggrad = gradients:clone()
+config = opt.optimconfig or {}
+config.learningRate = config.learningRate or 1e-5
+config.learningRate0 = config.learningRate0 or config.learningRate
+config.learningRateDecay = config.learningRateDecay or 0
+print(config)
+batchSize = 100
+state = {}
 for epoch =1,opt.numepochs do 
+	-- learning rate decay
+	if config.learningRateDecay > 0 then
+		local lr0 = config.learningRate0
+		local lambda = config.learningRateDecay
+		config.learningRate = lr0 / (1 + lr0 * lambda * epoch)
+	end
 	collectgarbage()
     local upperbound = 0
 	local trainnll = 0
@@ -427,6 +433,7 @@ for epoch =1,opt.numepochs do
 	avggradlist = updateList(avggradlist,avggrad:norm())
 
     if epoch % 10  == 0 then
+		print('config',config)
     	print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
 		--trainlogpv = importanceSampling(data.train_x, opt.S)
 		testlogpv = importanceSampling(data.test_x, opt.S)

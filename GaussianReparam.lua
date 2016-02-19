@@ -10,10 +10,17 @@ function GaussianReparam:__init(dimension,noiseparam)
 	self.noiseparam = noiseparam or 0.05
 	self.train = true
 	self.KL = 0
+	self.beta = 1
 end 
 
+function GaussianReparam:setAnnealing(beta)
+	self.beta = beta or 1
+	assert(type(self.beta) == 'number', 'beta must be a number or nil (which defaults to 1)')
+end
+
 --Forward pass
-function GaussianReparam:updateOutput(input)	
+function GaussianReparam:updateOutput(input,beta)
+	self:setAnnealing(beta)
 	if input[1]:dim()==1 then  --SGD setting 
 		if not self.dimension then self.dimension = input[1]:size(1) end
 	elseif input[1]:dim()==2 then --Batch setting 
@@ -26,7 +33,7 @@ function GaussianReparam:updateOutput(input)
 	local noise = torch.randn(input[1]:size()):typeAs(input[1])
 
 	self.output = torch.exp(input[2]*0.5):cmul(self.eps):add(input[1])
-	local kl = (input[2] + 1):mul(-1):add(torch.pow(input[1],2)):add(torch.exp(input[2]))
+	local kl = (input[2] + 1):mul(-1):add(torch.pow(input[1],2)*self.beta):add(torch.exp(input[2]))
 	self.KL = kl:sum()*0.5
 
 	--Add noise to output during training 
@@ -37,10 +44,14 @@ function GaussianReparam:updateOutput(input)
     return self.output
 end
 
+function GaussianReparam:forward(input,beta)
+	return self:updateOutput(input,beta)
+end
+
 --Backward pass
 function GaussianReparam:updateGradInput(input, gradOutput)
 	--Gradient with respect to mean
-	self.gradInput[1]= gradOutput+input[1]
+	self.gradInput[1]= (gradOutput+input[1])*self.beta
 	--Gradient with respect to R
 	self.gradInput[2]=torch.mul(input[2],0.5):exp():mul(0.5):cmul(self.eps):cmul(gradOutput)
 	local grad_R = (torch.exp(input[2])-1)*0.5
