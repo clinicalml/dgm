@@ -19,13 +19,17 @@ opt.savedir       = opt.savedir or "save_planarflow1"
 opt.savebestmodel = opt.savebestmodel or true
 opt.annealing     = opt.annealing or false
 opt.anneal_iters  = opt.anneal_iters or 10000
+opt.warmup        = opt.warmup or false
+opt.warmup_epochs = opt.warmup_epochs or 200
 opt.optimMethod   = opt.optimMethod or 'adam'
 opt.datadir       = opt.datadir or './'
 opt.numepochs     = opt.numepochs or 1000
+opt.numsamples    = opt.numsamples or 1 -- num samples during training
 
 opt.devicenum     = opt.devicenum or 1
 cutorch.setDevice(opt.devicenum)
 torch.setdefaulttensortype('torch.FloatTensor')
+sys.execute('mkdir -p ' .. opt.savedir)
 ---------------- Load Data ---------------
 data=loadBinarizedMNIST(true,opt.datadir)
 
@@ -175,7 +179,7 @@ function KL(beta)
 	if type(KL) == 'number' then
 		return KL
 	else
-		return KL:sum() 
+		return KL:sum()
 	end
 end
 
@@ -321,16 +325,26 @@ end
 
 
 -------------- Training Loop -------------
-local t_beta = 0 -- annealing index
 local avggrad = gradients:clone()
 config = opt.optimconfig or {}
 config.learningRate = config.learningRate or 1e-5
 config.learningRate0 = config.learningRate0 or config.learningRate
 config.learningRateDecay = config.learningRateDecay or 0
 print(config)
+print('#parameters =',#parameters)
+print('#gradients = ',#gradients)
 batchSize = 100
-state = {}
+if model.optim then
+	state = model.optim.state
+	print('state =',state)
+end
+local t_beta = config.t_beta or 0 -- annealing counter
+local t_warmup = config.t_warmup or 0 -- warmup counter
 for epoch =1,opt.numepochs do 
+	if opt.warmup then
+		t_warmup = t_warmup + 1
+	end
+
 	-- learning rate decay
 	if config.learningRateDecay > 0 then
 		local lr0 = config.learningRate0
@@ -353,22 +367,33 @@ for epoch =1,opt.numepochs do
 	local logdetJ = 0
 	local logpz = 0
 	local logqz0 = 0
-    local batch = torch.Tensor(batchSize,data.train_x:size(2)):typeAs(data.train_x)
+    local batch = torch.Tensor(batchSize*opt.numsamples,data.train_x:size(2)):typeAs(data.train_x)
 	-- Pass through data
     for i = 1, N, batchSize do
 		--parameters, gradients = flow_model:getParameters()
         xlua.progress(i+batchSize-1, data.train_x:size(1))
 	
         local k = 1
-        for j = i,i+batchSize-1 do
-            batch[k] = data.train_x[shuffle[j]] 
-            k = k + 1
-        end
+		for n = 1, opt.numsamples do
+			for j = i,i+batchSize-1 do
+				batch[k] = data.train_x[shuffle[j]] 
+				k = k + 1
+			end
+		end
 
         local opfunc = function(x)
             if x ~= parameters then
                 parameters:copy(x)
             end
+
+			if opt.warmup then
+				local warmup = math.min(1,epoch/opt.warmup_epochs)
+				reparam:setWarmUp(warmup)
+				if flow then
+					flow:setWarmUp(warmup)
+				end
+			end
+
 			--forward and backward
             mlp:zeroGradParameters()
             probs = mlp:forward(batch)
@@ -384,8 +409,6 @@ for epoch =1,opt.numepochs do
 				df_dw = df_dw*beta
 				if flow then
 					flow:setAnnealing(beta)
-				else
-					reparam:setAnnealing(beta)
 				end
 				t_beta = t_beta+1--batchSize
 			end
@@ -397,13 +420,18 @@ for epoch =1,opt.numepochs do
 			logdetJ = LogDetJ() + logdetJ
 			logpz = Logpz() + logpz
 			logqz0 = Logqz0() + logqz0
-			avggrad:add(gradients/N)
+			avggrad:add(gradients/opt.numsamples/N)
 			batchgradnormlist = updateList(batchgradnormlist,gradients:norm())
 
 			-- if annealing, revise upperbound function
 			if opt.annealing then
 				local kl = KL(beta)
 				batchupperbound = nll*beta + kl
+			end
+
+			if opt.numsamples > 1 then
+				batchupperbound = batchupperbound / opt.numsamples
+				gradients:div(opt.numsamples)
 			end
             return batchupperbound, gradients
         end
@@ -423,7 +451,7 @@ for epoch =1,opt.numepochs do
     end
 	
 	--Save results
-	upperboundlist = updateList(upperboundlist,upperbound/N)
+	upperboundlist = updateList(upperboundlist,upperbound/(N*opt.numsamples))
 	trainKLlist = updateList(trainKLlist,trainKL/N)
 	logdetJlist = updateList(logdetJlist,logdetJ/N)
 	logpzlist = updateList(logpzlist,logpz/N)
@@ -433,7 +461,10 @@ for epoch =1,opt.numepochs do
 	avggradlist = updateList(avggradlist,avggrad:norm())
 
     if epoch % 10  == 0 then
+		print('device',opt.device)
 		print('config',config)
+		print('#parameters =',#parameters)
+		print('#gradients = ',#gradients)
     	print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
 		--trainlogpv = importanceSampling(data.train_x, opt.S)
 		testlogpv = importanceSampling(data.test_x, opt.S)
@@ -454,6 +485,7 @@ for epoch =1,opt.numepochs do
 		model.optim.epoch = epoch
 		model.optim.batchSize = batchSize
 		model.optim.t_beta = t_beta
+		model.optim.t_warmup = t_warmup
 		torch.save(paths.concat(opt.savedir,'model.t7'),model)
 
 		--Display reconstructions and samples
@@ -486,7 +518,6 @@ for epoch =1,opt.numepochs do
 		testlogpvlist      = updateList(testlogpvlist,testlogpv)
 		--trainlogpvlist     = updateList(trainlogpvlist,trainlogpv)
 
-		sys.execute('mkdir -p ' .. opt.savedir)
 		torch.save(paths.concat(opt.savedir,'parameters.t7'), parameters)
 		torch.save(paths.concat(opt.savedir,'state.t7'), state)
 		torch.save(paths.concat(opt.savedir,'upperbound.t7'), torch.Tensor(upperboundlist))
