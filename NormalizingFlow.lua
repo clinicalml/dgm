@@ -8,7 +8,8 @@ function NormalizingFlow:__init()
 	self.KL = torch.Tensor()
 	self.logdetJ = torch.Tensor()
 	self.logpz = torch.Tensor()
-	self.beta = 1
+	self.beta = 1 -- annealing
+	self.warmup = 1 -- warm up
 	self.gradOutput = torch.Tensor()
 end
 
@@ -47,6 +48,8 @@ function NormalizingFlow:getlogdetJ()
 end
 
 function NormalizingFlow:getKL(beta)
+	--local beta  = self.beta or beta
+	local warmup = self.warmup or 1
 	if self.output:nDimension() == 1 then
 		self.KL:resize(1):zero()
 	elseif self.output:nDimension() == 2 then
@@ -64,13 +67,28 @@ function NormalizingFlow:getKL(beta)
 	else
 		self.KL:add(self:getlogpz()*beta)
 	end
+	if warmup ~= 1 then
+		self.KL:mul(warmup)
+	end
 	return self.KL
 end
 
 function NormalizingFlow:setAnnealing(beta)
-	-- this only impacts gradient calculations
 	self.beta = beta or 1
 end
+
+function NormalizingFlow:setWarmUp(warmup)
+	--note that the warmup only impacts the gradient calculations
+	--thus, impacts to KL must be determined outside of this module
+	self.warmup = warmup or 1
+	for i=1,#self.modules do
+		if self.modules[i].setWarmUp then
+			self.modules[i]:setWarmUp(self.warmup)
+			--print(self.modules[i],self.modules[i].warmup)
+		end
+	end
+end
+
 
 function NormalizingFlow:updateOutput(input)
 	self.output = parent.updateOutput(self,input)
@@ -82,11 +100,15 @@ end
 function NormalizingFlow:updateGradInput(input, gradOutput)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
+	self.warmup = self.warmup or 1
 	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
-	if self.beta ~= 1 then
-		self.gradOutput:add(self.beta,self.output)
-	else
-		self.gradOutput:add(self.output)
+	local multiplier = self.beta*self.warmup
+	if multiplier ~= 0 then
+		if multiplier ~= 1 then
+			self.gradOutput:add(multiplier,self.output)
+		else
+			self.gradOutput:add(self.output)
+		end
 	end
 	return parent.updateGradInput(self,input,self.gradOutput)
 end
@@ -94,11 +116,15 @@ end
 function NormalizingFlow:accGradParameters(input, gradOutput)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
+	self.warmup = self.warmup or 1
 	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
-	if self.beta ~= 1 then
-		self.gradOutput:add(self.beta,self.output)
-	else
-		self.gradOutput:add(self.output)
+	local multiplier = self.beta*self.warmup
+	if multiplier ~= 0 then
+		if multiplier ~= 1 then
+			self.gradOutput:add(multiplier,self.output)
+		else
+			self.gradOutput:add(self.output)
+		end
 	end
 	return parent.accGradParameters(self,input,self.gradOutput)
 end
@@ -106,11 +132,15 @@ end
 function NormalizingFlow:backward(input, gradOutput, scale)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
+	self.warmup = self.warmup or 1
 	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
-	if self.beta ~= 1 then
-		self.gradOutput:add(self.beta,self.output)
-	else
-		self.gradOutput:add(self.output)
+	local multiplier = self.beta*self.warmup
+	if multiplier ~= 0 then
+		if multiplier ~= 1 then
+			self.gradOutput:add(multiplier,self.output)
+		else
+			self.gradOutput:add(self.output)
+		end
 	end
 	return parent.backward(self,input,self.gradOutput, scale)
 end
@@ -118,11 +148,15 @@ end
 function NormalizingFlow:accUpdateGradParameters(input, gradOutput, lr)
 	-- add gradient logpz w.r.t. z
 	self.beta = self.beta or 1
+	self.warmup = self.warmup or 1
 	self.gradOutput:resizeAs(gradOutput):copy(gradOutput)
-	if self.beta ~= 1 then
-		self.gradOutput:add(self.beta,self.output)
-	else
-		self.gradOutput:add(self.output)
+	local multiplier = self.beta*self.warmup
+	if multiplier ~= 0 then
+		if multiplier ~= 1 then
+			self.gradOutput:add(multiplier,self.output)
+		else
+			self.gradOutput:add(self.output)
+		end
 	end
 	return parent.accUpdateGradParameters(self,input,self.gradOutput, lr)
 end
