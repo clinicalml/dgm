@@ -11,6 +11,10 @@ cmd:option('-lrdecay',0)
 cmd:option('-numepochs',2000)
 cmd:option('-beta1',0.9)
 cmd:option('-beta2',0.999)
+cmd:option('-init_std',1e-1)
+cmd:option('-numsamples',1)
+cmd:option('-warmup',false)
+cmd:option('-warmup_epochs',200)
 
 
 opt = cmd:parse(arg)
@@ -38,6 +42,11 @@ if opt.lrdecay > 0 then
 end
 opt.experiment     = opt.experiment .. '_' .. tostring(opt.beta1) .. 'b1'
 opt.experiment     = opt.experiment .. '_' .. tostring(opt.beta2) .. 'b2'
+opt.experiment     = opt.experiment .. '_init' .. tostring(opt.init_std)
+opt.experiment     = opt.experiment .. '_samples' .. tostring(opt.numsamples)
+if opt.warmup then
+	opt.experiment = opt.experiment .. '_warmup' .. opt.warmup_epochs
+end
 
 opt.savedir        = paths.concat(opt.rootdir,opt.experimentdir,opt.experiment)
 opt.datadir        = '/scratch/jmj/dgm_maxout40'
