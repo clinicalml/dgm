@@ -16,6 +16,7 @@ function PlanarFlow:__init(dimension)
 	self.gradBias = torch.Tensor(1)
 	self.output = torch.Tensor(dimension)
 	self.gradInput = torch.Tensor(dimension)
+	self.warmup = 1
 end
 
 function PlanarFlow:getweights()
@@ -25,6 +26,11 @@ function PlanarFlow:getweights()
 	local db = self.gradBias
 	return u,w,b,du,dw,db
 end
+
+function PlanarFlow:setWarmUp(warmup)
+	self.warmup = warmup or 1
+end
+
 
 function PlanarFlow:updateOutput(input)
 	assert(input ~= nil, "input cannot be nil")
@@ -63,6 +69,7 @@ function PlanarFlow:updateOutput(input)
 end
 
 function PlanarFlow:updateGradInput(input, gradOutput)
+	self.warmup = self.warmup or 1
 	local u,w,b,_,_,_ = self:getweights()
 
 	-- calculate u_hat
@@ -86,7 +93,11 @@ function PlanarFlow:updateGradInput(input, gradOutput)
 
 		local wTu_hat = torch.dot(w,u_hat)
 		-- gradient w.r.t. log|J|
-		gradInput:add(torch.ger(h:cmul(dh):mul(2*wTu_hat):cdiv(dh:mul(wTu_hat):add(1+1e-12)),w))
+		if self.warmup == 1 then
+			gradInput:add(torch.ger(h:cmul(dh):mul(2*wTu_hat):cdiv(dh:mul(wTu_hat):add(1+1e-12)),w))
+		else
+			gradInput:add(self.warmup,torch.ger(h:cmul(dh):mul(2*wTu_hat):cdiv(dh:mul(wTu_hat):add(1+1e-12)),w))
+		end
 
 	else
 		local h = torch.tanh(torch.dot(input,w)+b)
@@ -97,7 +108,11 @@ function PlanarFlow:updateGradInput(input, gradOutput)
 
 		local wTu_hat = torch.dot(w,u_hat)
 		-- gradient w.r.t. log|J|
-		gradInput:add(w*2*wTu_hat*h*dh/(1+1e-12+wTu_hat*dh))
+		if self.warmup == 1 then
+			gradInput:add(w*2*wTu_hat*h*dh/(1+1e-12+wTu_hat*dh))
+		else
+			gradInput:add(self.warmup,w*2*wTu_hat*h*dh/(1+1e-12+wTu_hat*dh))
+		end
 	end
 
 	self.gradInput = gradInput
@@ -106,6 +121,7 @@ end
 
 
 function PlanarFlow:accGradParameters(input, gradOutput, scale)
+	self.warmup = self.warmup or 1
 	scale = scale or 1
 
 	local u,w,b,du,dw,db = self:getweights()
@@ -134,7 +150,7 @@ function PlanarFlow:accGradParameters(input, gradOutput, scale)
 		local dlogJdu = dh*wTu_hat
 		dlogJdu:add(1+1e-12)
 		dlogJdu:cdiv(dh,dlogJdu)
-		du:add(-w*(dlogJdu:sum()*torch.sigmoid(wTu)*scale))
+		du:add(-w*(dlogJdu:sum()*torch.sigmoid(wTu)*self.warmup*scale))
 
 		-- gradient log(p(x|z)) w.r.t. w
 		local wThdf = torch.dot(w,hdf)
@@ -146,13 +162,13 @@ function PlanarFlow:accGradParameters(input, gradOutput, scale)
 
 		-- gradient log|J| w.r.t. w
 		local val = dlogJdu:sum()
-		dw:add(u*(val*(torch.sigmoid(-wTu)-1)*scale))
-		dw:addmv(2*wTu_hat*scale,input:t(),torch.cmul(dlogJdu,h))
+		dw:add(u*(val*(torch.sigmoid(-wTu)-1)*self.warmup*scale))
+		dw:addmv(2*wTu_hat*self.warmup*scale,input:t(),torch.cmul(dlogJdu,h))
 
 		-- gradient log(p(x|z)) w.r.t. b
 		db:add(torch.dot(u_hat,torch.mv(gradOutput:t(),dh))*scale)
 		-- gradient log|J| w.r.t. b
-		db:add(2*torch.dot(dlogJdu,h)*wTu_hat*scale)
+		db:add(2*torch.dot(dlogJdu,h)*wTu_hat*self.warmup*scale)
 
 
 
