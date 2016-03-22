@@ -45,8 +45,9 @@ function loadmodel(opt)
 	print('Recognition Network')
 	print(rec_base)
 	local x = nn.Identity()()
-	local mu        = nn.Linear(opt.vardim,opt.dim_stochastic)(rec_base(x))
-	local logsigma  = nn.Linear(opt.vardim,opt.dim_stochastic)(rec_base(x))
+	local rec_base_out = rec_base(x)
+	local mu        = nn.Linear(opt.vardim,opt.dim_stochastic)(rec_base_out)
+	local logsigma  = nn.Linear(opt.vardim,opt.dim_stochastic)(rec_base_out)
 	local rec_model = nn.gModule({x},{mu,logsigma})
 
 	local reparam
