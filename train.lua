@@ -73,7 +73,7 @@ function getsamples()
 	end
 	return samples,mean_prob
 end
----------  Evaluate Likelihood   ---------
+---------  Evaluate Bound on Likelihood   ---------
 function eval(dataset)
 	mlp:evaluate()
 	local probs = mlp:forward(dataset)
@@ -96,14 +96,14 @@ for epoch =1,5000 do
 	local trainnll = 0
     local time = sys.clock()
     local shuffle = torch.randperm(data.train_x:size(1))
-	if epoch==100 then config.learningRate = 5e-5 end
-	if epoch > 30 then config.learningRate = math.max(config.learningRate / 1.000005, 0.000001) end
+    if epoch==100 then config.learningRate = 5e-5 end
+    if epoch > 30 then config.learningRate = math.max(config.learningRate / 1.000005, 0.000001) end
     --Make sure batches are always batchSize
     local N = data.train_x:size(1) - (data.train_x:size(1) % batchSize)
     local N_test = data.test_x:size(1) - (data.test_x:size(1) % batchSize)
-	local probs 
+    local probs 
     local batch = torch.Tensor(batchSize,data.train_x:size(2)):typeAs(data.train_x)
-	-- Pass through data
+    -- Pass through data
     for i = 1, N, batchSize do
         xlua.progress(i+batchSize-1, data.train_x:size(1))
 
@@ -140,34 +140,34 @@ for epoch =1,5000 do
 
     if epoch % 10  == 0 then
     	print("\nEpoch: " .. epoch .. " Upperbound: " .. upperbound/N .. " Time: " .. sys.clock() - time)
-		--Display reconstructions and samples
-		img_format.title="Train Reconstructions"
-		img_format.win = id_reconstr
-		id_reconstr = disp.images(stitch(probs,batch),img_format)
-		local testnll,probs = eval(data.test_x)
-		local b_test = torch.zeros(100,data.test_x:size(2)) 
-		local p_test = torch.zeros(100,data.test_x:size(2)) 
-		local shufidx = torch.randperm(data.test_x:size(1))
-		for i=1,100 do
-			p_test[i] = probs[shufidx[i]]:double()
-			b_test[i] = data.test_x[shufidx[i]]:double()
-		end
-		img_format.title="Test Reconstructions"
-		img_format.win = id_testreconstr
-		id_testreconstr = disp.images(stitch(p_test,b_test),img_format)
-		img_format.title="Model Samples"
-		img_format.win = id_samples
-		local s,mp = getsamples()
-		id_samples =  disp.images(s,img_format)
-		img_format.title="Mean Probabilities"
-		img_format.win = id_mp
-		id_mp =  disp.images(mp,img_format)
-		print ("Train NLL:",trainnll/N,"Test NLL: ",testnll)
+	--Display reconstructions and samples
+	img_format.title="Train Reconstructions"
+	img_format.win = id_reconstr
+	id_reconstr = disp.images(stitch(probs,batch),img_format)
+	local testnll,probs = eval(data.test_x)
+	local b_test = torch.zeros(100,data.test_x:size(2)) 
+	local p_test = torch.zeros(100,data.test_x:size(2)) 
+	local shufidx = torch.randperm(data.test_x:size(1))
+	for i=1,100 do
+		p_test[i] = probs[shufidx[i]]:double()
+		b_test[i] = data.test_x[shufidx[i]]:double()
+	end
+	img_format.title="Test Reconstructions"
+	img_format.win = id_testreconstr
+	id_testreconstr = disp.images(stitch(p_test,b_test),img_format)
+	img_format.title="Model Samples"
+	img_format.win = id_samples
+	local s,mp = getsamples()
+	id_samples =  disp.images(s,img_format)
+	img_format.title="Mean Probabilities"
+	img_format.win = id_mp
+	id_mp =  disp.images(mp,img_format)
+	print ("Train Bound:",trainnll/N,"Test Bound: ",testnll)
         torch.save('save/parameters.t7', parameters)
         torch.save('save/state.t7', state)
         torch.save('save/upperbound.t7', torch.Tensor(upperboundlist))
-		local s,mp = getsamples()
-		torch.save('save/samples.t7',s)
-		torch.save('save/mean_probs.t7',mp)
+	local s,mp = getsamples()
+	torch.save('save/samples.t7',s)
+	torch.save('save/mean_probs.t7',mp)
     end
 end
